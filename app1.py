@@ -514,7 +514,10 @@ if menu == 'Tareas & Alertas':
     df = fetch_institutions_df()
     if not df.empty:
         df['last_interaction'] = pd.to_datetime(df['last_interaction'], errors='coerce')
-        stale = df[df['last_interaction'] < (pd.Timestamp.now() - pd.Timedelta(days=7))]
+        # Convert last_interaction to naive datetime (remove timezone) for comparison
+        if pd.api.types.is_datetime64_any_dtype(df['last_interaction']):
+            df['last_interaction'] = df['last_interaction'].dt.tz_localize(None)
+        stale = df[df['last_interaction'] < (pd.Timestamp.now().tz_localize(None) - pd.Timedelta(days=7))]
         if not stale.empty:
             st.warning('Leads sin contacto > 7 días:')
             for i,row in stale.iterrows():
