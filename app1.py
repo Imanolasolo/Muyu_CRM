@@ -28,6 +28,9 @@ def init_db():
         contact_email TEXT,
         contact_phone TEXT,
         website TEXT,
+        pais TEXT,
+        ciudad TEXT,
+        direccion TEXT,
         created_contact DATE,
         last_interaction DATE,
         num_teachers INTEGER,
@@ -82,12 +85,13 @@ def now_date():
 def sql_insert_institution(data: dict):
     conn = get_conn()
     c = conn.cursor()
-    c.execute('''INSERT INTO institutions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+    c.execute('''INSERT INTO institutions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
         data['id'], data['name'], data.get('rector'), data.get('rector_position'), data.get('contact_email'),
-        data.get('contact_phone'), data.get('website'), data.get('created_contact'), data.get('last_interaction'),
+        data.get('contact_phone'), data.get('website'), data.get('pais'), data.get('ciudad'), data.get('direccion'),
+        data.get('created_contact'), data.get('last_interaction'),
         data.get('num_teachers'), data.get('num_students'), data.get('avg_fee'), data.get('initial_contact_medium'),
         data.get('stage'), data.get('substage'), data.get('program_proposed'), data.get('proposal_value'), data.get('observations'),
-        # note: table has 18 fields, last field for no_interest_reason - pass None if absent
+        data.get('assigned_commercial'), data.get('no_interest_reason')
     ))
     conn.commit()
     conn.close()
@@ -98,13 +102,15 @@ def save_institution(data: dict):
     conn = get_conn()
     c = conn.cursor()
     c.execute('''
-    INSERT OR REPLACE INTO institutions (id,name,rector,rector_position,contact_email,contact_phone,website,created_contact,last_interaction,num_teachers,num_students,avg_fee,initial_contact_medium,stage,substage,program_proposed,proposal_value,observations,no_interest_reason,assigned_commercial)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    INSERT OR REPLACE INTO institutions (id,name,rector,rector_position,contact_email,contact_phone,website,pais,ciudad,direccion,created_contact,last_interaction,num_teachers,num_students,avg_fee,initial_contact_medium,stage,substage,program_proposed,proposal_value,observations,assigned_commercial,no_interest_reason)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ''', (
         data['id'], data['name'], data.get('rector'), data.get('rector_position'), data.get('contact_email'),
-        data.get('contact_phone'), data.get('website'), data.get('created_contact'), data.get('last_interaction'),
+        data.get('contact_phone'), data.get('website'), data.get('pais'), data.get('ciudad'), data.get('direccion'),
+        data.get('created_contact'), data.get('last_interaction'),
         data.get('num_teachers'), data.get('num_students'), data.get('avg_fee'), data.get('initial_contact_medium'),
-        data.get('stage'), data.get('substage'), data.get('program_proposed'), data.get('proposal_value'), data.get('observations'), data.get('no_interest_reason'), data.get('assigned_commercial')
+        data.get('stage'), data.get('substage'), data.get('program_proposed'), data.get('proposal_value'), data.get('observations'),
+        data.get('assigned_commercial'), data.get('no_interest_reason')
     ))
     conn.commit()
     conn.close()
@@ -112,7 +118,11 @@ def save_institution(data: dict):
 
 def fetch_institutions_df():
     conn = get_conn()
-    df = pd.read_sql_query('SELECT * FROM institutions', conn, parse_dates=['created_contact','last_interaction'])
+    df = pd.read_sql_query('SELECT * FROM institutions', conn)
+    # Convertir a datetime (fecha y hora) si es posible
+    for col in ['created_contact', 'last_interaction']:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
     conn.close()
     return df
 
@@ -143,39 +153,73 @@ def create_task(institution_id, title, due_date, notes=None):
 st.set_page_config(page_title='MUYU Education CRM', layout='wide')
 st.title('CRM Comercial — MUYU Education')
 
-menu = st.sidebar.selectbox('Navegación', ['Kanban', 'Registrar institución', 'Buscar / Editar', 'Dashboard', 'Tareas & Alertas'])
+menu = st.sidebar.selectbox('Navegación', ['Panel Admin', 'Registrar institución', 'Buscar / Editar', 'Dashboard', 'Tareas & Alertas'])
 
 # Quick filters
 st.sidebar.header('Filtros rápidos')
 filter_stage = st.sidebar.multiselect('Etapa', options=['Abierto','En proceso','Cerrado','No interesado'], default=None)
 filter_medium = st.sidebar.multiselect('Medio contacto', options=['Whatsapp','Correo electrónico','Llamada','Evento','Referido'], default=None)
 
+# Filtros rápidos por país y ciudad
+df_all = fetch_institutions_df()
+filter_pais = st.sidebar.multiselect('País', options=sorted(df_all['pais'].dropna().unique()), default=None)
+filter_ciudad = st.sidebar.multiselect('Ciudad', options=sorted(df_all['ciudad'].dropna().unique()), default=None)
+
 # ----------------------
 # Page: Registrar institución
 # ----------------------
 if menu == 'Registrar institución':
     st.header('Registrar nueva institución')
-    with st.form('form_new_inst'):
+    with st.expander('Formulario de registro de institución', expanded=True):
         name = st.text_input('Nombre de la institución', max_chars=200)
-        rector = st.text_input('Rector/Directivo principal (nombre completo)')
-        rector_position = st.text_input('Cargo')
-        contact_email = st.text_input('Correo electrónico de contacto')
-        contact_phone = st.text_input('Teléfono')
+        col1, col2 = st.columns(2)
+        with col1:
+            rector = st.text_input('Contraparte, persona de contacto')
+        with col2:
+            rector_position = st.text_input('Cargo')
+        col1, col2 = st.columns(2)
+        with col1:
+            contact_email = st.text_input('Correo electrónico de contacto')
+        with col2:
+            contact_phone = st.text_input('Teléfono')
         website = st.text_input('Página web')
-        created_contact = st.date_input('Fecha de creación de contacto', value=now_date())
-        last_interaction = st.date_input('Fecha última interacción', value=now_date())
-        num_teachers = st.number_input('Número de docentes', min_value=0, step=1)
-        num_students = st.number_input('Número de estudiantes', min_value=0, step=1)
-        avg_fee = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f")
-        initial_contact_medium = st.selectbox('Medio de contacto inicial', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'])
-        stage = st.selectbox('Etapa', ['Abierto','En proceso','Cerrado','No interesado'])
-        substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'])
-        program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'])
-        proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            pais = st.text_input('País')
+        with col2:
+            ciudad = st.text_input('Ciudad')
+        with col3:
+            direccion = st.text_input('Dirección')
+        col1, col2 = st.columns(2)
+        with col1:
+            created_contact = st.date_input('Fecha de creación de contacto', value=now_date())
+        with col2:
+            last_interaction = st.date_input('Fecha última interacción', value=now_date())
+        col1, col2 = st.columns(2)
+        with col1:
+            num_teachers = st.number_input('Número de docentes', min_value=0, step=1)
+        with col2:
+            num_students = st.number_input('Número de estudiantes', min_value=0, step=1)
+        col1, col2 = st.columns(2)
+        with col1:
+            avg_fee = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f")
+        with col2:
+            initial_contact_medium = st.selectbox('Medio de contacto inicial', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'])
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            stage = st.selectbox('Etapa', ['Abierto','En proceso','Cerrado','No interesado'])
+        with col2:
+            substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'])
+        with col3:
+            program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'])
+        col1, col2 = st.columns(2)
+        with col1:
+            proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f")
+        with col2:
+            assigned_commercial = st.text_input('Responsable comercial')
         observations = st.text_area('Observaciones')
-        assigned_commercial = st.text_input('Responsable comercial')
-        submitted = st.form_submit_button('Guardar institución')
-        if submitted:
+        guardar = st.button('Guardar institución')
+        if guardar:
             if not name:
                 st.error('El nombre de la institución es obligatorio')
             else:
@@ -187,6 +231,9 @@ if menu == 'Registrar institución':
                     'contact_email': contact_email,
                     'contact_phone': contact_phone,
                     'website': website,
+                    'pais': pais,
+                    'ciudad': ciudad,
+                    'direccion': direccion,
                     'created_contact': str(created_contact),
                     'last_interaction': str(last_interaction),
                     'num_teachers': int(num_teachers),
@@ -207,8 +254,8 @@ if menu == 'Registrar institución':
 # ----------------------
 # Page: Kanban board
 # ----------------------
-if menu == 'Kanban':
-    st.header('Kanban — Ciclo de vida de leads')
+if menu == 'Panel Admin':
+    st.header('Panel Admin — Ciclo de vida de leads')
     df = fetch_institutions_df()
     if not df.empty:
         # Apply filters
@@ -216,6 +263,10 @@ if menu == 'Kanban':
             df = df[df['stage'].isin(filter_stage)]
         if filter_medium:
             df = df[df['initial_contact_medium'].isin(filter_medium)]
+        if filter_pais:
+            df = df[df['pais'].isin(filter_pais)]
+        if filter_ciudad:
+            df = df[df['ciudad'].isin(filter_ciudad)]
 
         cols = st.columns([1,1,1,1])
         stages = ['Abierto','En proceso','Cerrado','No interesado']
@@ -225,47 +276,71 @@ if menu == 'Kanban':
                 stage_df = df[df['stage']==stage_name]
                 for i,row in stage_df.sort_values('last_interaction',ascending=False).iterrows():
                     with st.expander(f"{row['name']} — {row['rector'] or ''}"):
-                        st.write('Cargo:', row['rector_position'])
-                        st.write('Contacto:', row['contact_email'], ' / ', row['contact_phone'])
-                        st.write('Última interacción:', row['last_interaction'])
-                        st.write('Programa propuesto:', row['program_proposed'])
-                        st.write('Observaciones:', row['observations'])
-                        st.write('Asignado a:', row.get('assigned_commercial'))
+                        # Mostrar fecha de última interacción
+                        st.markdown(f"**Última interacción:** {row['last_interaction'].date() if not pd.isna(row['last_interaction']) else 'N/A'}")
+                        # Campos editables igual que en creación
+                        name_edit = st.text_input('Nombre de la institución', value=row['name'], key=f'name_{row["id"]}')
+                        rector_edit = st.text_input('Contraparte, persona de contacto', value=row['rector'], key=f'rector_{row["id"]}')
+                        rector_position_edit = st.text_input('Cargo', value=row['rector_position'], key=f'cargo_{row["id"]}')
+                        contact_email_edit = st.text_input('Correo electrónico de contacto', value=row['contact_email'], key=f'email_{row["id"]}')
+                        contact_phone_edit = st.text_input('Teléfono', value=row['contact_phone'], key=f'phone_{row["id"]}')
+                        website_edit = st.text_input('Página web', value=row['website'], key=f'web_{row["id"]}')
+                        pais_edit = st.text_input('País', value=row['pais'] if 'pais' in row else '', key=f'pais_{row["id"]}')
+                        ciudad_edit = st.text_input('Ciudad', value=row['ciudad'] if 'ciudad' in row else '', key=f'ciudad_{row["id"]}')
+                        direccion_edit = st.text_input('Dirección', value=row['direccion'] if 'direccion' in row else '', key=f'direccion_{row["id"]}')
+                        num_teachers_edit = st.number_input('Número de docentes', min_value=0, step=1, value=int(row['num_teachers']) if not pd.isna(row['num_teachers']) else 0, key=f'teachers_{row["id"]}')
+                        num_students_edit = st.number_input('Número de estudiantes', min_value=0, step=1, value=int(row['num_students']) if not pd.isna(row['num_students']) else 0, key=f'students_{row["id"]}')
+                        avg_fee_edit = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f", value=float(row['avg_fee']) if not pd.isna(row['avg_fee']) else 0.0, key=f'fee_{row["id"]}')
+                        initial_contact_medium_edit = st.selectbox('Medio de contacto inicial', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'], index=['Whatsapp','Correo electrónico','Llamada','Evento','Referido'].index(row['initial_contact_medium']) if row['initial_contact_medium'] in ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'] else 0, key=f'medium_{row["id"]}')
+                        stage_edit = st.selectbox('Etapa', ['Abierto','En proceso','Cerrado','No interesado'], index=['Abierto','En proceso','Cerrado','No interesado'].index(row['stage']) if row['stage'] in ['Abierto','En proceso','Cerrado','No interesado'] else 0, key=f'stage_{row["id"]}')
+                        substage_edit = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'], index=['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'].index(row['substage']) if row['substage'] in ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'] else 0, key=f'substage_{row["id"]}')
+                        program_proposed_edit = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'], index=['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'].index(row['program_proposed']) if row['program_proposed'] in ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'] else 0, key=f'program_{row["id"]}')
+                        proposal_value_edit = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) else 0.0, key=f'proposal_{row["id"]}')
+                        observaciones_edit = st.text_area('Observaciones', value=row['observations'] or '', key=f'observaciones_{row["id"]}')
+                        assign_to = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '', key=f'assign_{row["id"]}')
+                        no_interest_reason_edit = st.text_input('Motivo No interesado', value=row.get('no_interest_reason') or '', key=f'no_interest_{row["id"]}')
 
-                        # Actions: move stage, change substage, log interaction, assign
-                        new_stage = st.selectbox(f'Mover etapa ({row["id"]})', ['--','Abierto','En proceso','Cerrado','No interesado'], key=f'stage_move_{row["id"]}')
-                        new_substage = st.selectbox(f'Subetapa ({row["id"]})', ['--','Primera reunión','Envío propuesta','Negociación','Sin respuesta','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'], key=f'substage_{row["id"]}')
-                        assign_to = st.text_input('Asignar responsable comercial', value=row.get('assigned_commercial') or '', key=f'assign_{row["id"]}')
-                        # Definir chosen_stage y chosen_substage para ambos contextos
-                        chosen_stage = row['stage'] if new_stage == '--' else new_stage
-                        chosen_substage = row['substage'] if new_substage == '--' else new_substage
                         if st.button('Guardar cambios', key=f'save_{row["id"]}'):
-                            # update
+                            from pytz import timezone
+                            import datetime
+                            def safe_int(val):
+                                try:
+                                    return int(val)
+                                except (ValueError, TypeError):
+                                    return 0
+                            def safe_float(val):
+                                try:
+                                    return float(val)
+                                except (ValueError, TypeError):
+                                    return 0.0
+                            tz = timezone('America/Guayaquil')
+                            now_ecuador = datetime.datetime.now(tz)
                             conn = get_conn()
                             c = conn.cursor()
-                            c.execute('UPDATE institutions SET stage=?, substage=?, assigned_commercial=? WHERE id=?', (chosen_stage, chosen_substage, assign_to, row['id']))
+                            c.execute('''
+                                UPDATE institutions SET name=?, rector=?, rector_position=?, contact_email=?, contact_phone=?, website=?, pais=?, ciudad=?, direccion=?, num_teachers=?, num_students=?, avg_fee=?, initial_contact_medium=?, stage=?, substage=?, program_proposed=?, proposal_value=?, observations=?, assigned_commercial=?, no_interest_reason=?, last_interaction=? WHERE id=?
+                            ''', (
+                                name_edit, rector_edit, rector_position_edit, contact_email_edit, contact_phone_edit, website_edit, pais_edit, ciudad_edit, direccion_edit,
+                                safe_int(num_teachers_edit), safe_int(num_students_edit), safe_float(avg_fee_edit), initial_contact_medium_edit, stage_edit, substage_edit, program_proposed_edit, safe_float(proposal_value_edit), observaciones_edit, assign_to, no_interest_reason_edit, now_ecuador, row['id']
+                            ))
                             conn.commit()
                             conn.close()
                             st.rerun()
 
-                        # Interaction form
-                        with st.form(f'interact_{row["id"]}'):
-                            medium = st.selectbox('Medio', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'], key=f'medium_{row["id"]}')
-                            notes = st.text_area('Notas', key=f'notes_{row["id"]}')
-                            date = st.date_input('Fecha', value=now_date(), key=f'date_{row["id"]}')
-                            submitted_i = st.form_submit_button('Registrar interacción')
-                            if submitted_i:
-                                add_interaction(row['id'], medium, notes, date)
-                                st.success('Interacción registrada')
-                                # Automations
-                                # If moved to Reunión agendada -> create task
-                                if (new_substage == 'Reunión agendada') or (row['substage']=='Reunión agendada'):
-                                    create_task(row['id'], 'Reunión agendada - confirmar asistencia', date, notes='Auto-generated')
-                                # If proposal sent -> follow-up in 48h
-                                if (new_substage == 'Envío propuesta') or (chosen_substage=='Envío propuesta'):
-                                    follow_up_date = date + timedelta(days=2)
-                                    create_task(row['id'], 'Seguimiento - Propuesta enviada', follow_up_date, notes='Auto follow-up 48h')
-                                st.rerun()
+                        # Campos para crear tarea (NO usar expander aquí)
+                        st.markdown("**Crear nueva tarea para esta institución:**")
+                        title = st.text_input('Título de la tarea', key=f'task_title_{row["id"]}')
+                        due_date = st.date_input('Fecha de vencimiento', value=now_date(), key=f'task_due_{row["id"]}')
+                        notes = st.text_area('Notas de la tarea', key=f'task_notes_{row["id"]}')
+                        responsable = st.text_input('Responsable de tarea', key=f'task_responsable_{row["id"]}')
+                        responsable_email = st.text_input('Email responsable', key=f'task_responsable_email_{row["id"]}')
+                        responsable_whatsapp = st.text_input('Whatsapp responsable', key=f'task_responsable_whatsapp_{row["id"]}')
+                        if st.button('Crear tarea', key=f'create_task_{row["id"]}'):
+                            # Combina los datos en notes para almacenarlos
+                            full_notes = f"{notes}\nResponsable: {responsable}\nEmail: {responsable_email}\nWhatsapp: {responsable_whatsapp}"
+                            create_task(row['id'], title, due_date, full_notes)
+                            st.success('Tarea creada correctamente')
+                            st.rerun()
     else:
         st.info('No hay instituciones registradas aún. Ve a "Registrar institución"')
 
@@ -283,28 +358,55 @@ if menu == 'Buscar / Editar':
         else:
             results = df
         st.dataframe(results)
-        # Select one to edit
-        sel = st.selectbox('Seleccionar institución', options=results['id'].tolist()) if not results.empty else None
+        # Select one to edit por nombre
+        name_to_id = dict(zip(results['name'], results['id']))
+        sel_name = st.selectbox('Seleccionar institución', options=results['name'].tolist()) if not results.empty else None
+        sel = name_to_id.get(sel_name) if sel_name else None
         if sel:
             row = results[results['id']==sel].iloc[0]
-            with st.form('edit_inst'):
+            with st.expander('Editar institución', expanded=True):
                 name = st.text_input('Nombre de la institución', value=row['name'])
-                rector = st.text_input('Rector/Directivo principal', value=row['rector'])
-                contact_email = st.text_input('Correo', value=row['contact_email'])
+                col1, col2 = st.columns(2)
+                with col1:
+                    rector = st.text_input('Contraparte, persona de contacto', value=row['rector'])
+                with col2:
+                    rector_position = st.text_input('Cargo', value=row['rector_position'])
+                contact_email = st.text_input('Correo electrónico de contacto', value=row['contact_email'])
                 contact_phone = st.text_input('Teléfono', value=row['contact_phone'])
+                website = st.text_input('Página web', value=row['website'])
+                pais = st.text_input('País', value=row['pais'] if 'pais' in row else '')
+                ciudad = st.text_input('Ciudad', value=row['ciudad'] if 'ciudad' in row else '')
+                direccion = st.text_input('Dirección', value=row['direccion'] if 'direccion' in row else '')
+                num_teachers = st.number_input('Número de docentes', min_value=0, step=1, value=int(row['num_teachers']) if not pd.isna(row['num_teachers']) and str(row['num_teachers']).isdigit() else 0)
+                num_students = st.number_input('Número de estudiantes', min_value=0, step=1, value=int(row['num_students']) if not pd.isna(row['num_students']) and str(row['num_students']).isdigit() else 0)
+                avg_fee = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f", value=float(row['avg_fee']) if not pd.isna(row['avg_fee']) and str(row['avg_fee']).replace('.','',1).isdigit() else 0.0)
+                initial_contact_medium = st.selectbox('Medio de contacto inicial', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'], index=['Whatsapp','Correo electrónico','Llamada','Evento','Referido'].index(row['initial_contact_medium']) if row['initial_contact_medium'] in ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'] else 0)
                 stage = st.selectbox('Etapa', ['Abierto','En proceso','Cerrado','No interesado'], index=['Abierto','En proceso','Cerrado','No interesado'].index(row['stage']) if row['stage'] in ['Abierto','En proceso','Cerrado','No interesado'] else 0)
-                substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'], index=0)
+                substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'], index=['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'].index(row['substage']) if row['substage'] in ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'] else 0)
+                program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'], index=['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'].index(row['program_proposed']) if row['program_proposed'] in ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'] else 0)
+                proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) and str(row['proposal_value']).replace('.','',1).isdigit() else 0.0)
+                observations = st.text_area('Observaciones', value=row['observations'] or '')
+                assigned_commercial = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '')
                 no_interest_reason = st.text_input('Motivo No interesado', value=row.get('no_interest_reason') or '')
-                save = st.form_submit_button('Guardar')
-                delete = st.form_submit_button('Eliminar institución', type='primary')
-                if save:
+                guardar = st.button('Guardar cambios')
+                eliminar = st.button('Eliminar institución')
+                if guardar:
+                    from pytz import timezone
+                    import datetime
+                    tz = timezone('America/Guayaquil')
+                    now_ecuador = datetime.datetime.now(tz)
                     conn = get_conn()
                     c = conn.cursor()
-                    c.execute('UPDATE institutions SET name=?, rector=?, contact_email=?, contact_phone=?, stage=?, substage=?, no_interest_reason=? WHERE id=?', (name, rector, contact_email, contact_phone, stage, substage, no_interest_reason or None, sel))
+                    c.execute('''
+                        UPDATE institutions SET name=?, rector=?, rector_position=?, contact_email=?, contact_phone=?, website=?, pais=?, ciudad=?, direccion=?, num_teachers=?, num_students=?, avg_fee=?, initial_contact_medium=?, stage=?, substage=?, program_proposed=?, proposal_value=?, observations=?, assigned_commercial=?, no_interest_reason=?, last_interaction=? WHERE id=?
+                    ''', (
+                        name, rector, rector_position, contact_email, contact_phone, website, pais, ciudad, direccion,
+                        int(num_teachers), int(num_students), float(avg_fee), initial_contact_medium, stage, substage, program_proposed, float(proposal_value), observations, assigned_commercial, no_interest_reason, now_ecuador, sel
+                    ))
                     conn.commit()
                     conn.close()
                     st.success('Cambios guardados')
-                if delete:
+                if eliminar:
                     conn = get_conn()
                     c = conn.cursor()
                     c.execute('DELETE FROM institutions WHERE id=?', (sel,))
@@ -366,22 +468,61 @@ if menu == 'Dashboard':
 if menu == 'Tareas & Alertas':
     st.header('Tareas y alertas automatizadas')
     conn = get_conn()
-    # Unir tasks con institutions para mostrar el nombre
     tasks = pd.read_sql_query('''
         SELECT t.id, i.name as institucion, t.title, t.due_date, t.done, t.created_at, t.notes
         FROM tasks t LEFT JOIN institutions i ON t.institution_id = i.id
         ORDER BY t.due_date ASC
     ''', conn, parse_dates=['due_date','created_at'])
     conn.close()
+    # Sección para autenticación de admin para borrar tareas
+    st.markdown("### Borrar tareas (solo admin)")
+    admin_user = st.text_input("Usuario admin", key="admin_user")
+    admin_pass = st.text_input("Contraseña admin", type="password", key="admin_pass")
+    is_admin = (admin_user == "admin" and admin_pass == "admin123")
     if tasks.empty:
         st.info('No hay tareas registradas')
     else:
-        st.dataframe(tasks)
+        for idx, row in tasks.iterrows():
+            col1, col2, col3 = st.columns([8,1,1])
+            with col1:
+                st.write(f"**{row['title']}** — {row['institucion']} — Vence: {row['due_date'].date() if not pd.isna(row['due_date']) else 'N/A'}")
+                st.write(f"Notas: {row['notes'] or ''}")
+                st.write(f"Creada: {row['created_at'].date() if not pd.isna(row['created_at']) else 'N/A'}")
+            with col2:
+                checked = st.checkbox('Done', value=bool(row['done']), key=f"done_{row['id']}")
+                if checked != bool(row['done']):
+                    conn = get_conn()
+                    c = conn.cursor()
+                    c.execute('UPDATE tasks SET done=? WHERE id=?', (int(checked), row['id']))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+            with col3:
+                if is_admin:
+                    if st.button('Eliminar', key=f'del_task_{row["id"]}'):
+                        conn = get_conn()
+                        c = conn.cursor()
+                        c.execute('DELETE FROM tasks WHERE id=?', (row['id'],))
+                        conn.commit()
+                        conn.close()
+                        st.success('Tarea eliminada')
+                        st.rerun()
+        # Si prefieres mostrar también el dataframe:
+        # st.dataframe(tasks)
 
-    # Alerts: leads without contact > 7 days
+    # Alerts: leads without contact > 7 días
     df = fetch_institutions_df()
     if not df.empty:
         df['last_interaction'] = pd.to_datetime(df['last_interaction'], errors='coerce')
+        stale = df[df['last_interaction'] < (pd.Timestamp.now() - pd.Timedelta(days=7))]
+        if not stale.empty:
+            st.warning('Leads sin contacto > 7 días:')
+            for i,row in stale.iterrows():
+                st.write(f"{row['name']} — Última interacción: {row['last_interaction'].date() if not pd.isna(row['last_interaction']) else 'N/A'} — Responsable: {row.get('assigned_commercial')}")
+                if st.button(f'Marcar tarea de seguimiento ({row["id"]})'):
+                    create_task(row['id'], 'Seguimiento - Lead sin contacto >7d', pd.Timestamp.now().date() + timedelta(days=1), notes='Generado desde alerta')
+                    st.success('Tarea creada')
+                    st.rerun()
         stale = df[df['last_interaction'] < (pd.Timestamp.now() - pd.Timedelta(days=7))]
         if not stale.empty:
             st.warning('Leads sin contacto > 7 días:')
