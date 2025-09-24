@@ -18,15 +18,22 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
+    
+    # Check if table exists and get its columns
+    c.execute("PRAGMA table_info(institutions)")
+    existing_columns = [row[1] for row in c.fetchall()]
+    
     # institutions table
     c.execute('''
     CREATE TABLE IF NOT EXISTS institutions (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        rector TEXT,
-        rector_position TEXT,
-        contact_email TEXT,
-        contact_phone TEXT,
+        rector_name TEXT NOT NULL,
+        rector_email TEXT NOT NULL,
+        rector_phone TEXT NOT NULL,
+        contraparte_name TEXT NOT NULL,
+        contraparte_email TEXT NOT NULL,
+        contraparte_phone TEXT NOT NULL,
         website TEXT,
         pais TEXT,
         ciudad TEXT,
@@ -41,11 +48,34 @@ def init_db():
         substage TEXT,
         program_proposed TEXT,
         proposal_value REAL,
+        contract_start_date DATE,
+        contract_end_date DATE,
         observations TEXT,
         assigned_commercial TEXT,
         no_interest_reason TEXT
     )
     ''')
+    
+    # Add missing columns if table already exists
+    if existing_columns:
+        new_columns = [
+            ('rector_name', 'TEXT'),
+            ('rector_email', 'TEXT'),
+            ('rector_phone', 'TEXT'),
+            ('contraparte_name', 'TEXT'),
+            ('contraparte_email', 'TEXT'),
+            ('contraparte_phone', 'TEXT'),
+            ('contract_start_date', 'DATE'),
+            ('contract_end_date', 'DATE')
+        ]
+        
+        for col_name, col_type in new_columns:
+            if col_name not in existing_columns:
+                try:
+                    c.execute(f'ALTER TABLE institutions ADD COLUMN {col_name} {col_type}')
+                except sqlite3.OperationalError:
+                    pass  # Column might already exist
+    
     # interactions (history)
     c.execute('''
     CREATE TABLE IF NOT EXISTS interactions (
@@ -86,8 +116,9 @@ def sql_insert_institution(data: dict):
     conn = get_conn()
     c = conn.cursor()
     c.execute('''INSERT INTO institutions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
-        data['id'], data['name'], data.get('rector'), data.get('rector_position'), data.get('contact_email'),
-        data.get('contact_phone'), data.get('website'), data.get('pais'), data.get('ciudad'), data.get('direccion'),
+        data['id'], data['name'], data.get('rector_name'), data.get('rector_email'), data.get('rector_phone'),
+        data.get('contraparte_name'), data.get('contraparte_email'), data.get('contraparte_phone'),
+        data.get('website'), data.get('pais'), data.get('ciudad'), data.get('direccion'),
         data.get('created_contact'), data.get('last_interaction'),
         data.get('num_teachers'), data.get('num_students'), data.get('avg_fee'), data.get('initial_contact_medium'),
         data.get('stage'), data.get('substage'), data.get('program_proposed'), data.get('proposal_value'), data.get('observations'),
@@ -102,14 +133,16 @@ def save_institution(data: dict):
     conn = get_conn()
     c = conn.cursor()
     c.execute('''
-    INSERT OR REPLACE INTO institutions (id,name,rector,rector_position,contact_email,contact_phone,website,pais,ciudad,direccion,created_contact,last_interaction,num_teachers,num_students,avg_fee,initial_contact_medium,stage,substage,program_proposed,proposal_value,observations,assigned_commercial,no_interest_reason)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    INSERT OR REPLACE INTO institutions (id,name,rector_name,rector_email,rector_phone,contraparte_name,contraparte_email,contraparte_phone,website,pais,ciudad,direccion,created_contact,last_interaction,num_teachers,num_students,avg_fee,initial_contact_medium,stage,substage,program_proposed,proposal_value,contract_start_date,contract_end_date,observations,assigned_commercial,no_interest_reason)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ''', (
-        data['id'], data['name'], data.get('rector'), data.get('rector_position'), data.get('contact_email'),
-        data.get('contact_phone'), data.get('website'), data.get('pais'), data.get('ciudad'), data.get('direccion'),
+        data['id'], data['name'], data.get('rector_name'), data.get('rector_email'), data.get('rector_phone'),
+        data.get('contraparte_name'), data.get('contraparte_email'), data.get('contraparte_phone'),
+        data.get('website'), data.get('pais'), data.get('ciudad'), data.get('direccion'),
         data.get('created_contact'), data.get('last_interaction'),
         data.get('num_teachers'), data.get('num_students'), data.get('avg_fee'), data.get('initial_contact_medium'),
-        data.get('stage'), data.get('substage'), data.get('program_proposed'), data.get('proposal_value'), data.get('observations'),
+        data.get('stage'), data.get('substage'), data.get('program_proposed'), data.get('proposal_value'), 
+        data.get('contract_start_date'), data.get('contract_end_date'), data.get('observations'),
         data.get('assigned_commercial'), data.get('no_interest_reason')
     ))
     conn.commit()
@@ -153,12 +186,13 @@ def create_task(institution_id, title, due_date, notes=None):
 st.set_page_config(page_title='MUYU Education CRM', layout='wide')
 st.title('CRM Comercial — MUYU Education')
 
+st.sidebar.image('assets/muyu_logo.jpg', use_container_width=True)
 menu = st.sidebar.selectbox('Navegación', ['Panel Admin', 'Registrar institución', 'Buscar / Editar', 'Dashboard', 'Tareas & Alertas'])
 
 # Quick filters
 st.sidebar.header('Filtros rápidos')
-filter_stage = st.sidebar.multiselect('Etapa', options=['Abierto','En proceso','Cerrado','No interesado'], default=None)
-filter_medium = st.sidebar.multiselect('Medio contacto', options=['Whatsapp','Correo electrónico','Llamada','Evento','Referido'], default=None)
+filter_stage = st.sidebar.multiselect('Etapa', options=['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'], default=None)
+filter_medium = st.sidebar.multiselect('Medio contacto', options=['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'], default=None)
 
 # Filtros rápidos por país y ciudad
 df_all = fetch_institutions_df()
@@ -170,22 +204,38 @@ filter_ciudad = st.sidebar.multiselect('Ciudad', options=sorted(df_all['ciudad']
 # ----------------------
 if menu == 'Registrar institución':
     st.header('Registrar nueva institución')
-    with st.expander('Formulario de registro de institución', expanded=True):
+    with st.expander('Formulario de registro de institución', expanded=False):
         name = st.text_input('Nombre de la institución', max_chars=200)
-        col1, col2 = st.columns(2)
+        
+        # CONTACTO section
+        st.markdown('**Rector (Obligatorio)**')
+        col1, col2, col3 = st.columns([2, 1, 2])
         with col1:
-            rector = st.text_input('Contraparte, persona de contacto')
+            rector_name = st.text_input('Nombre del Rector*', key='rector_name_reg')
+            rector_email = st.text_input('Email del Rector*', key='rector_email_reg')
         with col2:
-            rector_position = st.text_input('Cargo')
-        col1, col2 = st.columns(2)
+            rector_country_code = st.selectbox('País', 
+                options=['🇪🇨 +593 Ecuador', '🇨🇴 +57 Colombia', '🇵🇪 +51 Perú', '🇲🇽 +52 México', '🇨🇱 +56 Chile', '🇦🇷 +54 Argentina'], 
+                key='rector_country_reg')
+        with col3:
+            rector_phone = st.text_input('Celular del Rector* (sin código país)', key='rector_phone_reg', placeholder='987654321')
+        
+        st.markdown('**Contraparte (Obligatorio)**')
+        col1, col2, col3 = st.columns([2, 1, 2])
         with col1:
-            contact_email = st.text_input('Correo electrónico de contacto')
+            contraparte_name = st.text_input('Nombre de la Contraparte*', key='contraparte_name_reg')
+            contraparte_email = st.text_input('Email de la Contraparte*', key='contraparte_email_reg')
         with col2:
-            contact_phone = st.text_input('Teléfono')
+            contraparte_country_code = st.selectbox('País', 
+                options=['🇪🇨 +593 Ecuador', '🇨🇴 +57 Colombia', '🇵🇪 +51 Perú', '🇲🇽 +52 México', '🇨🇱 +56 Chile', '🇦🇷 +54 Argentina'], 
+                key='contraparte_country_reg')
+        with col3:
+            contraparte_phone = st.text_input('Celular de la Contraparte* (sin código país)', key='contraparte_phone_reg', placeholder='987654321')
+        
         website = st.text_input('Página web')
         col1, col2, col3 = st.columns(3)
         with col1:
-            pais = st.text_input('País')
+            pais = st.selectbox('País', options=['Ecuador', 'Colombia', 'Perú', 'México', 'Chile', 'Argentina'])
         with col2:
             ciudad = st.text_input('Ciudad')
         with col3:
@@ -204,32 +254,51 @@ if menu == 'Registrar institución':
         with col1:
             avg_fee = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f")
         with col2:
-            initial_contact_medium = st.selectbox('Medio de contacto inicial', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'])
+            initial_contact_medium = st.selectbox('Medio de contacto', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'])
         col1, col2, col3 = st.columns(3)
         with col1:
-            stage = st.selectbox('Etapa', ['Abierto','En proceso','Cerrado','No interesado'])
+            stage = st.selectbox('Etapa', ['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'])
         with col2:
-            substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'])
+            substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'])
         with col3:
-            program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'])
+            program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'])
         col1, col2 = st.columns(2)
         with col1:
             proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f")
         with col2:
             assigned_commercial = st.text_input('Responsable comercial')
+        
+        # CONTRATO section
+        st.markdown('**CONTRATO**')
+        col1, col2 = st.columns(2)
+        with col1:
+            contract_start_date = st.date_input('Inicio de contrato', value=None, key='contract_start_reg')
+        with col2:
+            contract_end_date = st.date_input('Fin de contrato', value=None, key='contract_end_reg')
+        
         observations = st.text_area('Observaciones')
         guardar = st.button('Guardar institución')
         if guardar:
             if not name:
                 st.error('El nombre de la institución es obligatorio')
+            elif not rector_name or not rector_email or not rector_phone:
+                st.error('Todos los campos del Rector son obligatorios')
+            elif not contraparte_name or not contraparte_email or not contraparte_phone:
+                st.error('Todos los campos de la Contraparte son obligatorios')
             else:
+                # Extract country codes
+                rector_full_phone = rector_country_code.split(' ')[1] + ' ' + rector_phone
+                contraparte_full_phone = contraparte_country_code.split(' ')[1] + ' ' + contraparte_phone
+                
                 inst = {
                     'id': str(uuid.uuid4()),
                     'name': name,
-                    'rector': rector,
-                    'rector_position': rector_position,
-                    'contact_email': contact_email,
-                    'contact_phone': contact_phone,
+                    'rector_name': rector_name,
+                    'rector_email': rector_email,
+                    'rector_phone': rector_full_phone,
+                    'contraparte_name': contraparte_name,
+                    'contraparte_email': contraparte_email,
+                    'contraparte_phone': contraparte_full_phone,
                     'website': website,
                     'pais': pais,
                     'ciudad': ciudad,
@@ -244,12 +313,157 @@ if menu == 'Registrar institución':
                     'substage': substage,
                     'program_proposed': program_proposed,
                     'proposal_value': float(proposal_value),
+                    'contract_start_date': str(contract_start_date) if contract_start_date else None,
+                    'contract_end_date': str(contract_end_date) if contract_end_date else None,
                     'observations': observations,
                     'no_interest_reason': None,
                     'assigned_commercial': assigned_commercial
                 }
                 save_institution(inst)
                 st.success('Institución guardada correctamente')
+
+    # Bulk upload expander
+    with st.expander('Carga masiva de instituciones', expanded=False):
+        st.markdown("""
+        **Instrucciones:**
+        - Sube un archivo Excel (.xlsx, .xls) o CSV (.csv)
+        - El archivo debe contener las siguientes columnas obligatorias:
+          - name: Nombre de la institución
+          - rector_name: Nombre del Rector
+          - rector_email: Email del Rector
+          - rector_phone: Teléfono del Rector (con código de país, ej: +593 987654321)
+          - contraparte_name: Nombre de la Contraparte
+          - contraparte_email: Email de la Contraparte
+          - contraparte_phone: Teléfono de la Contraparte (con código de país)
+        - Columnas opcionales: website, pais, ciudad, direccion, num_teachers, num_students, avg_fee, initial_contact_medium, stage, substage, program_proposed, proposal_value, observations, assigned_commercial
+        """)
+        
+        uploaded_file = st.file_uploader(
+            "Selecciona el archivo", 
+            type=['csv', 'xlsx', 'xls'],
+            help="Formatos soportados: CSV, Excel (xlsx, xls)"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # Read the file based on its type
+                if uploaded_file.name.endswith('.csv'):
+                    df_upload = pd.read_csv(uploaded_file)
+                else:
+                    df_upload = pd.read_excel(uploaded_file)
+                
+                st.success(f"Archivo cargado exitosamente: {len(df_upload)} filas encontradas")
+                
+                # Show preview
+                st.subheader("Vista previa de los datos:")
+                st.dataframe(df_upload.head())
+                
+                # Validate required columns
+                required_cols = ['name', 'rector_name', 'rector_email', 'rector_phone', 'contraparte_name', 'contraparte_email', 'contraparte_phone']
+                missing_cols = [col for col in required_cols if col not in df_upload.columns]
+                
+                if missing_cols:
+                    st.error(f"Faltan las siguientes columnas obligatorias: {', '.join(missing_cols)}")
+                else:
+                    st.success("Todas las columnas obligatorias están presentes")
+                    
+                    # Show data validation summary
+                    st.subheader("Resumen de validación:")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total de filas", len(df_upload))
+                    with col2:
+                        valid_rows = df_upload.dropna(subset=required_cols)
+                        st.metric("Filas válidas", len(valid_rows))
+                    with col3:
+                        invalid_rows = len(df_upload) - len(valid_rows)
+                        st.metric("Filas con datos faltantes", invalid_rows)
+                    
+                    if invalid_rows > 0:
+                        st.warning("Algunas filas tienen datos obligatorios faltantes y serán omitidas")
+                        
+                        # Show invalid rows
+                        with st.expander("Ver filas con problemas"):
+                            invalid_df = df_upload[df_upload[required_cols].isna().any(axis=1)]
+                            st.dataframe(invalid_df)
+                    
+                    # Process and upload button
+                    if st.button("Procesar y cargar instituciones", type="primary"):
+                        progress_bar = st.progress(0)
+                        success_count = 0
+                        error_count = 0
+                        errors = []
+                        
+                        # Process only valid rows
+                        valid_df = df_upload.dropna(subset=required_cols)
+                        
+                        for index, row in valid_df.iterrows():
+                            try:
+                                # Create institution dict with required fields
+                                inst = {
+                                    'id': str(uuid.uuid4()),
+                                    'name': str(row['name']).strip(),
+                                    'rector_name': str(row['rector_name']).strip(),
+                                    'rector_email': str(row['rector_email']).strip(),
+                                    'rector_phone': str(row['rector_phone']).strip(),
+                                    'contraparte_name': str(row['contraparte_name']).strip(),
+                                    'contraparte_email': str(row['contraparte_email']).strip(),
+                                    'contraparte_phone': str(row['contraparte_phone']).strip(),
+                                }
+                                
+                                # Add optional fields with defaults
+                                inst.update({
+                                    'website': str(row.get('website', '')).strip() if pd.notna(row.get('website')) else '',
+                                    'pais': str(row.get('pais', 'Ecuador')).strip() if pd.notna(row.get('pais')) else 'Ecuador',
+                                    'ciudad': str(row.get('ciudad', '')).strip() if pd.notna(row.get('ciudad')) else '',
+                                    'direccion': str(row.get('direccion', '')).strip() if pd.notna(row.get('direccion')) else '',
+                                    'created_contact': str(now_date()),
+                                    'last_interaction': str(now_date()),
+                                    'num_teachers': int(row.get('num_teachers', 0)) if pd.notna(row.get('num_teachers')) and str(row.get('num_teachers')).replace('.','').isdigit() else 0,
+                                    'num_students': int(row.get('num_students', 0)) if pd.notna(row.get('num_students')) and str(row.get('num_students')).replace('.','').isdigit() else 0,
+                                    'avg_fee': float(row.get('avg_fee', 0)) if pd.notna(row.get('avg_fee')) and str(row.get('avg_fee')).replace('.','').replace(',','').isdigit() else 0.0,
+                                    'initial_contact_medium': str(row.get('initial_contact_medium', 'Whatsapp')).strip() if pd.notna(row.get('initial_contact_medium')) else 'Whatsapp',
+                                    'stage': str(row.get('stage', 'Abierto')).strip() if pd.notna(row.get('stage')) else 'Abierto',
+                                    'substage': str(row.get('substage', 'Primera reunión')).strip() if pd.notna(row.get('substage')) else 'Primera reunión',
+                                    'program_proposed': str(row.get('program_proposed', 'Demo')).strip() if pd.notna(row.get('program_proposed')) else 'Demo',
+                                    'proposal_value': float(row.get('proposal_value', 0)) if pd.notna(row.get('proposal_value')) and str(row.get('proposal_value')).replace('.','').replace(',','').isdigit() else 0.0,
+                                    'contract_start_date': str(row.get('contract_start_date')) if pd.notna(row.get('contract_start_date')) else None,
+                                    'contract_end_date': str(row.get('contract_end_date')) if pd.notna(row.get('contract_end_date')) else None,
+                                    'observations': str(row.get('observations', '')).strip() if pd.notna(row.get('observations')) else '',
+                                    'assigned_commercial': str(row.get('assigned_commercial', '')).strip() if pd.notna(row.get('assigned_commercial')) else '',
+                                    'no_interest_reason': None
+                                })
+                                
+                                # Save institution
+                                save_institution(inst)
+                                success_count += 1
+                                
+                            except Exception as e:
+                                error_count += 1
+                                errors.append(f"Fila {index + 2}: {str(e)}")
+                            
+                            # Update progress
+                            progress = (index + 1) / len(valid_df)
+                            progress_bar.progress(progress)
+                        
+                        # Show results
+                        st.success(f"Proceso completado!")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("✅ Instituciones cargadas", success_count)
+                        with col2:
+                            st.metric("❌ Errores", error_count)
+                        
+                        if errors:
+                            with st.expander("Ver errores detallados"):
+                                for error in errors:
+                                    st.error(error)
+                        
+                        if success_count > 0:
+                            st.balloons()
+                        
+            except Exception as e:
+                st.error(f"Error al procesar el archivo: {str(e)}")
 
 # ----------------------
 # Page: Kanban board
@@ -269,37 +483,107 @@ if menu == 'Panel Admin':
             df = df[df['ciudad'].isin(filter_ciudad)]
 
         cols = st.columns([1,1,1,1])
-        stages = ['Abierto','En proceso','Cerrado','No interesado']
+        stages = ['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado']
         for col, stage_name in zip(cols, stages):
             with col:
                 st.subheader(stage_name)
                 stage_df = df[df['stage']==stage_name]
                 for i,row in stage_df.sort_values('last_interaction',ascending=False).iterrows():
-                    with st.expander(f"{row['name']} — {row['rector'] or ''}"):
+                    with st.expander(f"{row['name']} — {row.get('rector_name', '') or row.get('contraparte_name', '')}"):
                         # Mostrar fecha de última interacción
                         st.markdown(f"**Última interacción:** {row['last_interaction'].date() if not pd.isna(row['last_interaction']) else 'N/A'}")
+                        
                         # Campos editables igual que en creación
                         name_edit = st.text_input('Nombre de la institución', value=row['name'], key=f'name_{row["id"]}')
-                        rector_edit = st.text_input('Contraparte, persona de contacto', value=row['rector'], key=f'rector_{row["id"]}')
-                        rector_position_edit = st.text_input('Cargo', value=row['rector_position'], key=f'cargo_{row["id"]}')
-                        contact_email_edit = st.text_input('Correo electrónico de contacto', value=row['contact_email'], key=f'email_{row["id"]}')
-                        contact_phone_edit = st.text_input('Teléfono', value=row['contact_phone'], key=f'phone_{row["id"]}')
+                        
+                        # CONTACTO section
+                        st.markdown('**CONTACTO**')
+                        st.markdown('**Rector (Obligatorio)**')
+                        col1, col2, col3 = st.columns([2, 1, 2])
+                        with col1:
+                            rector_name_edit = st.text_input('Nombre del Rector*', value=row.get('rector_name', ''), key=f'rector_name_{row["id"]}')
+                            rector_email_edit = st.text_input('Email del Rector*', value=row.get('rector_email', ''), key=f'rector_email_{row["id"]}')
+                        with col2:
+                            current_rector_phone = str(row.get('rector_phone', ''))
+                            rector_country_options = ['🇪🇨 +593 Ecuador', '🇨🇴 +57 Colombia', '🇵🇪 +51 Perú', '🇲🇽 +52 México', '🇨🇱 +56 Chile', '🇦🇷 +54 Argentina']
+                            rector_country_index = 0
+                            for i, option in enumerate(rector_country_options):
+                                if option.split(' ')[1] in current_rector_phone:
+                                    rector_country_index = i
+                                    break
+                            rector_country_code_edit = st.selectbox('País', 
+                                options=rector_country_options, 
+                                index=rector_country_index,
+                                key=f'rector_country_{row["id"]}')
+                        with col3:
+                            # Extract phone number without country code
+                            rector_phone_only = current_rector_phone.replace('+593', '').replace('+57', '').replace('+51', '').replace('+52', '').replace('+56', '').replace('+54', '').strip()
+                            rector_phone_edit = st.text_input('Celular del Rector* (sin código país)', value=rector_phone_only, key=f'rector_phone_{row["id"]}', placeholder='987654321')
+                        
+                        st.markdown('**Contraparte (Obligatorio)**')
+                        col1, col2, col3 = st.columns([2, 1, 2])
+                        with col1:
+                            contraparte_name_edit = st.text_input('Nombre de la Contraparte*', value=row.get('contraparte_name', ''), key=f'contraparte_name_{row["id"]}')
+                            contraparte_email_edit = st.text_input('Email de la Contraparte*', value=row.get('contraparte_email', ''), key=f'contraparte_email_{row["id"]}')
+                        with col2:
+                            current_contraparte_phone = str(row.get('contraparte_phone', ''))
+                            contraparte_country_options = ['🇪🇨 +593 Ecuador', '🇨🇴 +57 Colombia', '🇵🇪 +51 Perú', '🇲🇽 +52 México', '🇨🇱 +56 Chile', '🇦🇷 +54 Argentina']
+                            contraparte_country_index = 0
+                            for i, option in enumerate(contraparte_country_options):
+                                if option.split(' ')[1] in current_contraparte_phone:
+                                    contraparte_country_index = i
+                                    break
+                            contraparte_country_code_edit = st.selectbox('País', 
+                                options=contraparte_country_options, 
+                                index=contraparte_country_index,
+                                key=f'contraparte_country_{row["id"]}')
+                        with col3:
+                            # Extract phone number without country code
+                            contraparte_phone_only = current_contraparte_phone.replace('+593', '').replace('+57', '').replace('+51', '').replace('+52', '').replace('+56', '').replace('+54', '').strip()
+                            contraparte_phone_edit = st.text_input('Celular de la Contraparte* (sin código país)', value=contraparte_phone_only, key=f'contraparte_phone_{row["id"]}', placeholder='987654321')
+                        
                         website_edit = st.text_input('Página web', value=row['website'], key=f'web_{row["id"]}')
-                        pais_edit = st.text_input('País', value=row['pais'] if 'pais' in row else '', key=f'pais_{row["id"]}')
+                        pais_edit = st.selectbox('País', options=['Ecuador', 'Colombia', 'Perú', 'México', 'Chile', 'Argentina'], index=['Ecuador', 'Colombia', 'Perú', 'México', 'Chile', 'Argentina'].index(row['pais']) if row['pais'] in ['Ecuador', 'Colombia', 'Perú', 'México', 'Chile', 'Argentina'] else 0, key=f'pais_{row["id"]}')
                         ciudad_edit = st.text_input('Ciudad', value=row['ciudad'] if 'ciudad' in row else '', key=f'ciudad_{row["id"]}')
                         direccion_edit = st.text_input('Dirección', value=row['direccion'] if 'direccion' in row else '', key=f'direccion_{row["id"]}')
-                        num_teachers_edit = st.number_input('Número de docentes', min_value=0, step=1, value=int(row['num_teachers']) if not pd.isna(row['num_teachers']) else 0, key=f'teachers_{row["id"]}')
-                        num_students_edit = st.number_input('Número de estudiantes', min_value=0, step=1, value=int(row['num_students']) if not pd.isna(row['num_students']) else 0, key=f'students_{row["id"]}')
-                        avg_fee_edit = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f", value=float(row['avg_fee']) if not pd.isna(row['avg_fee']) else 0.0, key=f'fee_{row["id"]}')
-                        initial_contact_medium_edit = st.selectbox('Medio de contacto inicial', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'], index=['Whatsapp','Correo electrónico','Llamada','Evento','Referido'].index(row['initial_contact_medium']) if row['initial_contact_medium'] in ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'] else 0, key=f'medium_{row["id"]}')
-                        stage_edit = st.selectbox('Etapa', ['Abierto','En proceso','Cerrado','No interesado'], index=['Abierto','En proceso','Cerrado','No interesado'].index(row['stage']) if row['stage'] in ['Abierto','En proceso','Cerrado','No interesado'] else 0, key=f'stage_{row["id"]}')
-                        substage_edit = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'], index=['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'].index(row['substage']) if row['substage'] in ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'] else 0, key=f'substage_{row["id"]}')
-                        program_proposed_edit = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'], index=['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'].index(row['program_proposed']) if row['program_proposed'] in ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'] else 0, key=f'program_{row["id"]}')
-                        proposal_value_edit = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) else 0.0, key=f'proposal_{row["id"]}')
-                        observaciones_edit = st.text_area('Observaciones', value=row['observations'] or '', key=f'observaciones_{row["id"]}')
-                        assign_to = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '', key=f'assign_{row["id"]}')
-                        no_interest_reason_edit = st.text_input('Motivo No interesado', value=row.get('no_interest_reason') or '', key=f'no_interest_{row["id"]}')
-
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            created_contact_edit = st.date_input('Fecha de creación de contacto', value=row['created_contact'], key=f'created_contact_{row["id"]}')
+                        with col2:
+                            last_interaction_edit = st.date_input('Fecha última interacción', value=row['last_interaction'], key=f'last_interaction_{row["id"]}')
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            num_teachers_edit = st.number_input('Número de docentes', min_value=0, step=1, value=int(row['num_teachers']) if not pd.isna(row['num_teachers']) else 0, key=f'teachers_{row["id"]}')
+                        with col2:
+                            num_students_edit = st.number_input('Número de estudiantes', min_value=0, step=1, value=int(row['num_students']) if not pd.isna(row['num_students']) else 0, key=f'students_{row["id"]}')
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            avg_fee_edit = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f", value=float(row['avg_fee']) if not pd.isna(row['avg_fee']) else 0.0, key=f'fee_{row["id"]}')
+                        with col2:
+                            initial_contact_medium_edit = st.selectbox('Medio de contacto', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'], index=['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'].index(row['initial_contact_medium']) if row['initial_contact_medium'] in ['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'] else 0, key=f'medium_{row["id"]}')
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            stage_edit = st.selectbox('Etapa', ['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'], index=['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'].index(row['stage']) if row['stage'] in ['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'] else 0, key=f'stage_{row["id"]}')
+                        with col2:
+                            substage_edit = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'], index=['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'].index(row['substage']) if row['substage'] in ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'] else 0, key=f'substage_{row["id"]}')
+                        with col3:
+                            program_proposed_edit = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'], index=['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'].index(row['program_proposed']) if row['program_proposed'] in ['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'] else 0, key=f'program_{row["id"]}')
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            proposal_value_edit = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) else 0.0, key=f'proposal_{row["id"]}')
+                        with col2:
+                            assigned_commercial_edit = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '', key=f'assign_{row["id"]}')
+                        
+                        # CONTRATO section
+                        st.markdown('**CONTRATO**')
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            contract_start_date_edit = st.date_input('Inicio de contrato', value=pd.to_datetime(row.get('contract_start_date')).date() if row.get('contract_start_date') else None, key=f'contract_start_{row["id"]}')
+                        with col2:
+                            contract_end_date_edit = st.date_input('Fin de contrato', value=pd.to_datetime(row.get('contract_end_date')).date() if row.get('contract_end_date') else None, key=f'contract_end_{row["id"]}')
+                        
+                        observations_edit = st.text_area('Observaciones', value=row['observations'] or '', key=f'observaciones_{row["id"]}')
+                        
                         if st.button('Guardar cambios', key=f'save_{row["id"]}'):
                             from pytz import timezone
                             import datetime
@@ -315,13 +599,18 @@ if menu == 'Panel Admin':
                                     return 0.0
                             tz = timezone('America/Guayaquil')
                             now_ecuador = datetime.datetime.now(tz)
+                            
+                            # Extract country codes and combine with phone numbers
+                            rector_full_phone_edit = rector_country_code_edit.split(' ')[1] + ' ' + rector_phone_edit
+                            contraparte_full_phone_edit = contraparte_country_code_edit.split(' ')[1] + ' ' + contraparte_phone_edit
+                            
                             conn = get_conn()
                             c = conn.cursor()
                             c.execute('''
-                                UPDATE institutions SET name=?, rector=?, rector_position=?, contact_email=?, contact_phone=?, website=?, pais=?, ciudad=?, direccion=?, num_teachers=?, num_students=?, avg_fee=?, initial_contact_medium=?, stage=?, substage=?, program_proposed=?, proposal_value=?, observations=?, assigned_commercial=?, no_interest_reason=?, last_interaction=? WHERE id=?
+                                UPDATE institutions SET name=?, rector_name=?, rector_email=?, rector_phone=?, contraparte_name=?, contraparte_email=?, contraparte_phone=?, website=?, pais=?, ciudad=?, direccion=?, num_teachers=?, num_students=?, avg_fee=?, initial_contact_medium=?, stage=?, substage=?, program_proposed=?, proposal_value=?, contract_start_date=?, contract_end_date=?, observations=?, assigned_commercial=?, no_interest_reason=?, last_interaction=? WHERE id=?
                             ''', (
-                                name_edit, rector_edit, rector_position_edit, contact_email_edit, contact_phone_edit, website_edit, pais_edit, ciudad_edit, direccion_edit,
-                                safe_int(num_teachers_edit), safe_int(num_students_edit), safe_float(avg_fee_edit), initial_contact_medium_edit, stage_edit, substage_edit, program_proposed_edit, safe_float(proposal_value_edit), observaciones_edit, assign_to, no_interest_reason_edit, now_ecuador, row['id']
+                                name_edit, rector_name_edit, rector_email_edit, rector_full_phone_edit, contraparte_name_edit, contraparte_email_edit, contraparte_full_phone_edit, website_edit, pais_edit, ciudad_edit, direccion_edit,
+                                safe_int(num_teachers_edit), safe_int(num_students_edit), safe_float(avg_fee_edit), initial_contact_medium_edit, stage_edit, substage_edit, program_proposed_edit, safe_float(proposal_value_edit), str(contract_start_date_edit) if contract_start_date_edit else None, str(contract_end_date_edit) if contract_end_date_edit else None, observations_edit, assigned_commercial_edit, None, now_ecuador, row['id']
                             ))
                             conn.commit()
                             conn.close()
@@ -353,11 +642,19 @@ if menu == 'Buscar / Editar':
     df = fetch_institutions_df()
     if not df.empty:
         if q:
-            mask = df['name'].str.contains(q, case=False, na=False) | df['rector'].str.contains(q, case=False, na=False) | df['contact_email'].str.contains(q, case=False, na=False)
+            # Updated search mask to include new contact fields
+            mask = (df['name'].str.contains(q, case=False, na=False) | 
+                   df['rector_name'].str.contains(q, case=False, na=False) | 
+                   df['rector_email'].str.contains(q, case=False, na=False) | 
+                   df['contraparte_name'].str.contains(q, case=False, na=False) | 
+                   df['contraparte_email'].str.contains(q, case=False, na=False))
             results = df[mask]
         else:
             results = df
-        st.dataframe(results)
+        
+        # Display all columns in the dataframe
+        st.dataframe(results, use_container_width=True)
+        
         # Select one to edit por nombre
         name_to_id = dict(zip(results['name'], results['id']))
         sel_name = st.selectbox('Seleccionar institución', options=results['name'].tolist()) if not results.empty else None
@@ -366,46 +663,121 @@ if menu == 'Buscar / Editar':
             row = results[results['id']==sel].iloc[0]
             with st.expander('Editar institución', expanded=True):
                 name = st.text_input('Nombre de la institución', value=row['name'])
-                col1, col2 = st.columns(2)
+                
+                # CONTACTO section
+                st.subheader('CONTACTO')
+                st.markdown('**Rector (Obligatorio)**')
+                col1, col2, col3 = st.columns([2, 1, 2])
                 with col1:
-                    rector = st.text_input('Contraparte, persona de contacto', value=row['rector'])
+                    rector_name = st.text_input('Nombre del Rector*', value=row.get('rector_name', ''))
+                    rector_email = st.text_input('Email del Rector*', value=row.get('rector_email', ''))
                 with col2:
-                    rector_position = st.text_input('Cargo', value=row['rector_position'])
-                contact_email = st.text_input('Correo electrónico de contacto', value=row['contact_email'])
-                contact_phone = st.text_input('Teléfono', value=row['contact_phone'])
+                    current_rector_phone = str(row.get('rector_phone', ''))
+                    rector_country_options = ['🇪🇨 +593 Ecuador', '🇨🇴 +57 Colombia', '🇵🇪 +51 Perú', '🇲🇽 +52 México', '🇨🇱 +56 Chile', '🇦🇷 +54 Argentina']
+                    rector_country_index = 0
+                    for i, option in enumerate(rector_country_options):
+                        if option.split(' ')[1] in current_rector_phone:
+                            rector_country_index = i
+                            break
+                    rector_country_code = st.selectbox('País', 
+                        options=rector_country_options, 
+                        index=rector_country_index,
+                        key='rector_country_edit')
+                with col3:
+                    # Extract phone number without country code
+                    rector_phone_only = current_rector_phone.replace('+593', '').replace('+57', '').replace('+51', '').replace('+52', '').replace('+56', '').replace('+54', '').strip()
+                    rector_phone = st.text_input('Celular del Rector* (sin código país)', value=rector_phone_only, placeholder='987654321')
+                
+                st.markdown('**Contraparte (Obligatorio)**')
+                col1, col2, col3 = st.columns([2, 1, 2])
+                with col1:
+                    contraparte_name = st.text_input('Nombre de la Contraparte*', value=row.get('contraparte_name', ''))
+                    contraparte_email = st.text_input('Email de la Contraparte*', value=row.get('contraparte_email', ''))
+                with col2:
+                    current_contraparte_phone = str(row.get('contraparte_phone', ''))
+                    contraparte_country_options = ['🇪🇨 +593 Ecuador', '🇨🇴 +57 Colombia', '🇵🇪 +51 Perú', '🇲🇽 +52 México', '🇨🇱 +56 Chile', '🇦🇷 +54 Argentina']
+                    contraparte_country_index = 0
+                    for i, option in enumerate(contraparte_country_options):
+                        if option.split(' ')[1] in current_contraparte_phone:
+                            contraparte_country_index = i
+                            break
+                    contraparte_country_code = st.selectbox('País', 
+                        options=contraparte_country_options, 
+                        index=contraparte_country_index,
+                        key='contraparte_country_edit')
+                with col3:
+                    # Extract phone number without country code
+                    contraparte_phone_only = current_contraparte_phone.replace('+593', '').replace('+57', '').replace('+51', '').replace('+52', '').replace('+56', '').replace('+54', '').strip()
+                    contraparte_phone = st.text_input('Celular de la Contraparte* (sin código país)', value=contraparte_phone_only, placeholder='987654321')
+                
                 website = st.text_input('Página web', value=row['website'])
-                pais = st.text_input('País', value=row['pais'] if 'pais' in row else '')
+                pais = st.selectbox('País', options=['Ecuador', 'Colombia', 'Perú', 'México', 'Chile', 'Argentina'], index=['Ecuador', 'Colombia', 'Perú', 'México', 'Chile', 'Argentina'].index(row['pais']) if row['pais'] in ['Ecuador', 'Colombia', 'Perú', 'México', 'Chile', 'Argentina'] else 0)
                 ciudad = st.text_input('Ciudad', value=row['ciudad'] if 'ciudad' in row else '')
                 direccion = st.text_input('Dirección', value=row['direccion'] if 'direccion' in row else '')
-                num_teachers = st.number_input('Número de docentes', min_value=0, step=1, value=int(row['num_teachers']) if not pd.isna(row['num_teachers']) and str(row['num_teachers']).isdigit() else 0)
-                num_students = st.number_input('Número de estudiantes', min_value=0, step=1, value=int(row['num_students']) if not pd.isna(row['num_students']) and str(row['num_students']).isdigit() else 0)
-                avg_fee = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f", value=float(row['avg_fee']) if not pd.isna(row['avg_fee']) and str(row['avg_fee']).replace('.','',1).isdigit() else 0.0)
-                initial_contact_medium = st.selectbox('Medio de contacto inicial', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'], index=['Whatsapp','Correo electrónico','Llamada','Evento','Referido'].index(row['initial_contact_medium']) if row['initial_contact_medium'] in ['Whatsapp','Correo electrónico','Llamada','Evento','Referido'] else 0)
-                stage = st.selectbox('Etapa', ['Abierto','En proceso','Cerrado','No interesado'], index=['Abierto','En proceso','Cerrado','No interesado'].index(row['stage']) if row['stage'] in ['Abierto','En proceso','Cerrado','No interesado'] else 0)
-                substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'], index=['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'].index(row['substage']) if row['substage'] in ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado'] else 0)
-                program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'], index=['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'].index(row['program_proposed']) if row['program_proposed'] in ['Programa Muyu Lab','Programa Piloto Muyu Lab','Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Demo'] else 0)
-                proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) and str(row['proposal_value']).replace('.','',1).isdigit() else 0.0)
+                col1, col2 = st.columns(2)
+                with col1:
+                    created_contact = st.date_input('Fecha de creación de contacto', value=row['created_contact'], key=f'created_contact_{row["id"]}')
+                with col2:
+                    last_interaction = st.date_input('Fecha última interacción', value=row['last_interaction'], key=f'last_interaction_{row["id"]}')
+                col1, col2 = st.columns(2)
+                with col1:
+                    num_teachers = st.number_input('Número de docentes', min_value=0, step=1, value=int(row['num_teachers']) if not pd.isna(row['num_teachers']) and str(row['num_teachers']).isdigit() else 0)
+                with col2:
+                    num_students = st.number_input('Número de estudiantes', min_value=0, step=1, value=int(row['num_students']) if not pd.isna(row['num_students']) and str(row['num_students']).isdigit() else 0)
+                col1, col2 = st.columns(2)
+                with col1:
+                    avg_fee = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f", value=float(row['avg_fee']) if not pd.isna(row['avg_fee']) and str(row['avg_fee']).replace('.','',1).isdigit() else 0.0)
+                with col2:
+                    initial_contact_medium = st.selectbox('Medio de contacto', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'], index=['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'].index(row['initial_contact_medium']) if row['initial_contact_medium'] in ['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'] else 0)
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    stage = st.selectbox('Etapa', ['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'], index=['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'].index(row['stage']) if row['stage'] in ['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado'] else 0, key=f'stage_{row["id"]}')
+                with col2:
+                    substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'], index=['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'].index(row['substage']) if row['substage'] in ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'] else 0, key=f'substage_{row["id"]}')
+                with col3:
+                    program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'], index=['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'].index(row['program_proposed']) if row['program_proposed'] in ['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'] else 0, key=f'program_{row["id"]}')
+                col1, col2 = st.columns(2)
+                with col1:
+                    proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) and str(row['proposal_value']).replace('.','',1).isdigit() else 0.0, key=f'proposal_{row["id"]}')
+                with col2:
+                    assigned_commercial = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '')
+                
+                # CONTRATO section
+                st.markdown('**CONTRATO**')
+                col1, col2 = st.columns(2)
+                with col1:
+                    contract_start_date = st.date_input('Inicio de contrato', value=pd.to_datetime(row.get('contract_start_date')).date() if row.get('contract_start_date') else None, key='contract_start_edit')
+                with col2:
+                    contract_end_date = st.date_input('Fin de contrato', value=pd.to_datetime(row.get('contract_end_date')).date() if row.get('contract_end_date') else None, key='contract_end_edit')
+                
                 observations = st.text_area('Observaciones', value=row['observations'] or '')
-                assigned_commercial = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '')
-                no_interest_reason = st.text_input('Motivo No interesado', value=row.get('no_interest_reason') or '')
                 guardar = st.button('Guardar cambios')
                 eliminar = st.button('Eliminar institución')
                 if guardar:
-                    from pytz import timezone
-                    import datetime
-                    tz = timezone('America/Guayaquil')
-                    now_ecuador = datetime.datetime.now(tz)
-                    conn = get_conn()
-                    c = conn.cursor()
-                    c.execute('''
-                        UPDATE institutions SET name=?, rector=?, rector_position=?, contact_email=?, contact_phone=?, website=?, pais=?, ciudad=?, direccion=?, num_teachers=?, num_students=?, avg_fee=?, initial_contact_medium=?, stage=?, substage=?, program_proposed=?, proposal_value=?, observations=?, assigned_commercial=?, no_interest_reason=?, last_interaction=? WHERE id=?
-                    ''', (
-                        name, rector, rector_position, contact_email, contact_phone, website, pais, ciudad, direccion,
-                        int(num_teachers), int(num_students), float(avg_fee), initial_contact_medium, stage, substage, program_proposed, float(proposal_value), observations, assigned_commercial, no_interest_reason, now_ecuador, sel
-                    ))
-                    conn.commit()
-                    conn.close()
-                    st.success('Cambios guardados')
+                    if not rector_name or not rector_email or not rector_phone:
+                        st.error('Todos los campos del Rector son obligatorios')
+                    elif not contraparte_name or not contraparte_email or not contraparte_phone:
+                        st.error('Todos los campos de la Contraparte son obligatorios')
+                    else:
+                        # Extract country codes and combine with phone numbers
+                        rector_full_phone = rector_country_code.split(' ')[1] + ' ' + rector_phone
+                        contraparte_full_phone = contraparte_country_code.split(' ')[1] + ' ' + contraparte_phone
+                        
+                        from pytz import timezone
+                        import datetime
+                        tz = timezone('America/Guayaquil')
+                        now_ecuador = datetime.datetime.now(tz)
+                        conn = get_conn()
+                        c = conn.cursor()
+                        c.execute('''
+                            UPDATE institutions SET name=?, rector_name=?, rector_email=?, rector_phone=?, contraparte_name=?, contraparte_email=?, contraparte_phone=?, website=?, pais=?, ciudad=?, direccion=?, num_teachers=?, num_students=?, avg_fee=?, initial_contact_medium=?, stage=?, substage=?, program_proposed=?, proposal_value=?, contract_start_date=?, contract_end_date=?, observations=?, assigned_commercial=?, no_interest_reason=?, last_interaction=? WHERE id=?
+                        ''', (
+                            name, rector_name, rector_email, rector_full_phone, contraparte_name, contraparte_email, contraparte_full_phone, website, pais, ciudad, direccion,
+                            int(num_teachers), int(num_students), float(avg_fee), initial_contact_medium, stage, substage, program_proposed, float(proposal_value), str(contract_start_date) if contract_start_date else None, str(contract_end_date) if contract_end_date else None, observations, assigned_commercial, None, now_ecuador, sel
+                        ))
+                        conn.commit()
+                        conn.close()
+                        st.success('Cambios guardados')
                 if eliminar:
                     conn = get_conn()
                     c = conn.cursor()
@@ -428,16 +800,16 @@ if menu == 'Dashboard':
         col1, col2, col3, col4 = st.columns(4)
         col1.metric('Total de leads', total)
         # % por etapa
-        stage_counts = df['stage'].value_counts().reindex(['Abierto','En proceso','Cerrado','No interesado']).fillna(0)
+        stage_counts = df['stage'].value_counts().reindex(['Abierto','En Proceso','Cerrado / Ganado','Perdido / No interesado']).fillna(0)
         col2.metric('Abiertos', int(stage_counts.get('Abierto',0)))
-        col3.metric('En proceso', int(stage_counts.get('En proceso',0)))
-        col4.metric('Cerrados', int(stage_counts.get('Cerrado',0)))
+        col3.metric('En proceso', int(stage_counts.get('En Proceso',0)))
+        col4.metric('Cerrados / Ganados', int(stage_counts.get('Cerrado / Ganado',0)))
 
         # conversion rate: abiertos -> cerrados ganados
         abiertos = stage_counts.get('Abierto',0)
-        cerrados = stage_counts.get('Cerrado',0)
+        cerrados = stage_counts.get('Cerrado / Ganado',0)
         conv = (cerrados / abiertos *100) if abiertos>0 else None
-        st.write('Tasa conversión (Abierto → Cerrado ganados):', f"{conv:.1f}%" if conv is not None else 'N/A')
+        st.write('Tasa conversión (Abierto → Cerrado / Ganado):', f"{conv:.1f}%" if conv is not None else 'N/A')
 
         # Medio de contacto mas efectivo
         med_counts = df['initial_contact_medium'].value_counts()
