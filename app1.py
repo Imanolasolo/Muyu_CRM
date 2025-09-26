@@ -326,6 +326,7 @@ if menu == 'Registrar institución':
     with st.expander('Carga masiva de instituciones', expanded=False):
         st.markdown("""
         **Instrucciones:**
+        - Descarga primero el template Excel para conocer el formato exacto
         - Sube un archivo Excel (.xlsx, .xls) o CSV (.csv)
         - El archivo debe contener las siguientes columnas obligatorias:
           - name: Nombre de la institución
@@ -337,6 +338,89 @@ if menu == 'Registrar institución':
           - contraparte_phone: Teléfono de la Contraparte (con código de país)
         - Columnas opcionales: website, pais, ciudad, direccion, num_teachers, num_students, avg_fee, initial_contact_medium, stage, substage, program_proposed, proposal_value, observations, assigned_commercial
         """)
+        
+        # Template download button
+        if st.button("📥 Descargar Template Excel", help="Descarga un archivo Excel con el formato exacto y ejemplos"):
+            # Create template data
+            template_data = {
+                'name': ['Universidad Ejemplo 1', 'Colegio San José', 'Instituto Tecnológico ABC'],
+                'rector_name': ['Dr. Juan Pérez', 'Lic. María González', 'Ing. Carlos Rodríguez'],
+                'rector_email': ['rector@universidad.edu', 'direccion@colegio.edu.ec', 'director@instituto.edu'],
+                'rector_phone': ['+593 987654321', '+57 3001234567', '+51 987123456'],
+                'contraparte_name': ['Lic. Ana Martínez', 'Prof. Luis Herrera', 'Dra. Patricia Silva'],
+                'contraparte_email': ['coordinacion@universidad.edu', 'academico@colegio.edu.ec', 'coordinadora@instituto.edu'],
+                'contraparte_phone': ['+593 987654322', '+57 3001234568', '+51 987123457'],
+                'website': ['www.universidad.edu', 'www.colegiosanjose.edu.ec', 'www.institutoabc.edu'],
+                'pais': ['Ecuador', 'Colombia', 'Perú'],
+                'ciudad': ['Quito', 'Bogotá', 'Lima'],
+                'direccion': ['Av. Principal 123', 'Calle 45 #12-34', 'Jr. Los Olivos 567'],
+                'num_teachers': [150, 25, 80],
+                'num_students': [2500, 450, 1200],
+                'avg_fee': [350.50, 180.00, 280.75],
+                'initial_contact_medium': ['Whatsapp', 'Correo electrónico', 'Reunión virtual'],
+                'stage': ['Abierto', 'En Proceso', 'Abierto'],
+                'substage': ['Primera reunión', 'Envío propuesta', 'Reunión agendada'],
+                'program_proposed': ['Programa Muyu Lab', 'Demo', 'Programa Muyu App'],
+                'proposal_value': [15000.00, 0.00, 8500.50],
+                'observations': ['Interesados en programa completo', 'Solicitan demo presencial', 'Evalúan presupuesto'],
+                'assigned_commercial': ['Juan Comercial', 'María Ventas', 'Carlos Manager'],
+                'contract_start_date': ['2024-03-01', '', '2024-04-15'],
+                'contract_end_date': ['2025-02-28', '', '2025-04-14']
+            }
+            
+            # Create template DataFrame
+            template_df = pd.DataFrame(template_data)
+            
+            # Create Excel file in memory
+            import io
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Sheet with examples
+                template_df.to_excel(writer, sheet_name='Ejemplos', index=False)
+                
+                # Empty template sheet
+                empty_df = pd.DataFrame(columns=template_df.columns)
+                empty_df.to_excel(writer, sheet_name='Plantilla_Vacia', index=False)
+                
+                # Instructions sheet
+                instructions = pd.DataFrame({
+                    'Columna': list(template_df.columns),
+                    'Obligatorio': ['SÍ' if col in ['name', 'rector_name', 'rector_email', 'rector_phone', 'contraparte_name', 'contraparte_email', 'contraparte_phone'] else 'NO' for col in template_df.columns],
+                    'Descripción': [
+                        'Nombre de la institución',
+                        'Nombre completo del Rector',
+                        'Email del Rector',
+                        'Teléfono con código país (+593 987654321)',
+                        'Nombre completo de la Contraparte',
+                        'Email de la Contraparte', 
+                        'Teléfono con código país (+593 987654321)',
+                        'Página web (opcional)',
+                        'País (Ecuador, Colombia, Perú, México, Chile, Argentina)',
+                        'Ciudad donde está ubicada',
+                        'Dirección física completa',
+                        'Número de docentes (número entero)',
+                        'Número de estudiantes (número entero)',
+                        'Pensión promedio (número decimal)',
+                        'Medio de contacto inicial',
+                        'Etapa actual del lead',
+                        'Subetapa específica',
+                        'Programa que se propuso',
+                        'Valor de la propuesta (número decimal)',
+                        'Observaciones generales',
+                        'Responsable comercial asignado',
+                        'Fecha inicio contrato (YYYY-MM-DD)',
+                        'Fecha fin contrato (YYYY-MM-DD)'
+                    ]
+                })
+                instructions.to_excel(writer, sheet_name='Instrucciones', index=False)
+            
+            # Download button
+            st.download_button(
+                label="📥 Descargar Template",
+                data=output.getvalue(),
+                file_name="template_carga_masiva_instituciones.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         
         uploaded_file = st.file_uploader(
             "Selecciona el archivo", 
@@ -350,120 +434,228 @@ if menu == 'Registrar institución':
                 if uploaded_file.name.endswith('.csv'):
                     df_upload = pd.read_csv(uploaded_file)
                 else:
-                    df_upload = pd.read_excel(uploaded_file)
+                    # For Excel files, try to read the first sheet or a specific sheet
+                    try:
+                        # First try to read 'Plantilla_Vacia' sheet if it exists (from our template)
+                        df_upload = pd.read_excel(uploaded_file, sheet_name='Plantilla_Vacia')
+                        if df_upload.empty:
+                            # If empty, try the first sheet
+                            df_upload = pd.read_excel(uploaded_file, sheet_name=0)
+                    except:
+                        # If no specific sheet, read the first one
+                        df_upload = pd.read_excel(uploaded_file, sheet_name=0)
                 
-                st.success(f"Archivo cargado exitosamente: {len(df_upload)} filas encontradas")
+                # Remove completely empty rows
+                df_upload = df_upload.dropna(how='all')
                 
-                # Show preview
-                st.subheader("Vista previa de los datos:")
-                st.dataframe(df_upload.head())
-                
-                # Validate required columns
-                required_cols = ['name', 'rector_name', 'rector_email', 'rector_phone', 'contraparte_name', 'contraparte_email', 'contraparte_phone']
-                missing_cols = [col for col in required_cols if col not in df_upload.columns]
-                
-                if missing_cols:
-                    st.error(f"Faltan las siguientes columnas obligatorias: {', '.join(missing_cols)}")
+                if df_upload.empty:
+                    st.warning("El archivo está vacío o no contiene datos.")
                 else:
-                    st.success("Todas las columnas obligatorias están presentes")
+                    st.success(f"Archivo cargado exitosamente: {len(df_upload)} filas encontradas")
                     
-                    # Show data validation summary
+                    # Show file info
+                    st.info(f"**Archivo:** {uploaded_file.name} | **Tamaño:** {uploaded_file.size} bytes")
+                    
+                    # Show preview of actual uploaded data
+                    st.subheader("Vista previa de los datos cargados:")
+                    st.dataframe(df_upload.head(10), use_container_width=True)
+                    
+                    # Show column info
+                    st.subheader("Información de columnas:")
+                    col_info = pd.DataFrame({
+                        'Columna': df_upload.columns.tolist(),
+                        'Tipo de datos': [str(df_upload[col].dtype) for col in df_upload.columns],
+                        'Valores no nulos': [df_upload[col].notna().sum() for col in df_upload.columns],
+                        'Valores únicos': [df_upload[col].nunique() for col in df_upload.columns]
+                    })
+                    st.dataframe(col_info, use_container_width=True)
+                    
+                    # Validate required columns - but allow flexibility
+                    required_cols = ['name', 'rector_name', 'rector_email', 'rector_phone', 'contraparte_name', 'contraparte_email', 'contraparte_phone']
+                    missing_cols = [col for col in required_cols if col not in df_upload.columns]
+                    
+                    if missing_cols:
+                        st.warning(f"⚠️ Faltan las siguientes columnas recomendadas: {', '.join(missing_cols)}")
+                        st.info("💡 El sistema creará valores por defecto para los campos faltantes. Podrás editarlos después en el Panel Admin.")
+                        
+                        # Show what defaults will be used - NO usar expander aquí
+                        st.markdown("**Valores por defecto que se asignarán:**")
+                        defaults_info = []
+                        for col in missing_cols:
+                            if 'email' in col:
+                                default_val = "sin-email@temp.com"
+                            elif 'phone' in col:
+                                default_val = "+593 000000000"
+                            elif 'name' in col and 'rector' in col:
+                                default_val = "Rector Sin Definir"
+                            elif 'name' in col and 'contraparte' in col:
+                                default_val = "Contraparte Sin Definir"
+                            else:
+                                default_val = "Sin definir"
+                            defaults_info.append({'Campo': col, 'Valor por defecto': default_val})
+                        
+                        defaults_df = pd.DataFrame(defaults_info)
+                        st.dataframe(defaults_df, use_container_width=True)
+                    else:
+                        st.success("✅ Todas las columnas recomendadas están presentes")
+                    
+                    # Show data validation summary - but be more flexible
                     st.subheader("Resumen de validación:")
+                    
+                    # Only require 'name' as truly mandatory
+                    truly_required = ['name']
+                    missing_truly_required = [col for col in truly_required if col not in df_upload.columns]
+                    
+                    if missing_truly_required:
+                        st.error(f"❌ La columna 'name' es absolutamente obligatoria y no se encuentra en el archivo.")
+                        st.stop()
+                    
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Total de filas", len(df_upload))
                     with col2:
-                        valid_rows = df_upload.dropna(subset=required_cols)
-                        st.metric("Filas válidas", len(valid_rows))
+                        # Count rows with at least the name field
+                        valid_rows = df_upload.dropna(subset=['name'])
+                        st.metric("Filas con nombre", len(valid_rows))
                     with col3:
                         invalid_rows = len(df_upload) - len(valid_rows)
-                        st.metric("Filas con datos faltantes", invalid_rows)
+                        st.metric("Filas sin nombre", invalid_rows)
                     
                     if invalid_rows > 0:
-                        st.warning("Algunas filas tienen datos obligatorios faltantes y serán omitidas")
+                        st.warning("⚠️ Las filas sin nombre de institución serán omitidas")
                         
-                        # Show invalid rows
-                        with st.expander("Ver filas con problemas"):
-                            invalid_df = df_upload[df_upload[required_cols].isna().any(axis=1)]
-                            st.dataframe(invalid_df)
+                        # Show invalid rows - NO usar expander
+                        st.markdown("**Filas sin nombre que serán omitidas:**")
+                        invalid_df = df_upload[df_upload['name'].isna()]
+                        st.dataframe(invalid_df, use_container_width=True)
                     
-                    # Process and upload button
-                    if st.button("Procesar y cargar instituciones", type="primary"):
-                        progress_bar = st.progress(0)
-                        success_count = 0
-                        error_count = 0
-                        errors = []
+                    # Additional warnings for missing important data
+                    if len(valid_rows) > 0:
+                        missing_contacts = 0
+                        contact_fields = ['rector_email', 'contraparte_email', 'rector_phone', 'contraparte_phone']
+                        available_contact_fields = [field for field in contact_fields if field in df_upload.columns]
                         
-                        # Process only valid rows
-                        valid_df = df_upload.dropna(subset=required_cols)
+                        if available_contact_fields:
+                            missing_contacts = len(valid_rows[valid_rows[available_contact_fields].isna().all(axis=1)])
+                            if missing_contacts > 0:
+                                st.warning(f"⚠️ {missing_contacts} instituciones no tienen información de contacto. Se asignarán valores temporales.")
+                    
+                    # Process and upload button - always show if we have names
+                    if len(valid_rows) > 0:
+                        st.info(f"🚀 Listo para procesar {len(valid_rows)} instituciones")
                         
-                        for index, row in valid_df.iterrows():
-                            try:
-                                # Create institution dict with required fields
-                                inst = {
-                                    'id': str(uuid.uuid4()),
-                                    'name': str(row['name']).strip(),
-                                    'rector_name': str(row['rector_name']).strip(),
-                                    'rector_email': str(row['rector_email']).strip(),
-                                    'rector_phone': str(row['rector_phone']).strip(),
-                                    'contraparte_name': str(row['contraparte_name']).strip(),
-                                    'contraparte_email': str(row['contraparte_email']).strip(),
-                                    'contraparte_phone': str(row['contraparte_phone']).strip(),
-                                }
-                                
-                                # Add optional fields with defaults
-                                inst.update({
-                                    'website': str(row.get('website', '')).strip() if pd.notna(row.get('website')) else '',
-                                    'pais': str(row.get('pais', 'Ecuador')).strip() if pd.notna(row.get('pais')) else 'Ecuador',
-                                    'ciudad': str(row.get('ciudad', '')).strip() if pd.notna(row.get('ciudad')) else '',
-                                    'direccion': str(row.get('direccion', '')).strip() if pd.notna(row.get('direccion')) else '',
-                                    'created_contact': str(now_date()),
-                                    'last_interaction': str(now_date()),
-                                    'num_teachers': int(row.get('num_teachers', 0)) if pd.notna(row.get('num_teachers')) and str(row.get('num_teachers')).replace('.','').isdigit() else 0,
-                                    'num_students': int(row.get('num_students', 0)) if pd.notna(row.get('num_students')) and str(row.get('num_students')).replace('.','').isdigit() else 0,
-                                    'avg_fee': float(row.get('avg_fee', 0)) if pd.notna(row.get('avg_fee')) and str(row.get('avg_fee')).replace('.','').replace(',','').isdigit() else 0.0,
-                                    'initial_contact_medium': str(row.get('initial_contact_medium', 'Whatsapp')).strip() if pd.notna(row.get('initial_contact_medium')) else 'Whatsapp',
-                                    'stage': str(row.get('stage', 'Abierto')).strip() if pd.notna(row.get('stage')) else 'Abierto',
-                                    'substage': str(row.get('substage', 'Primera reunión')).strip() if pd.notna(row.get('substage')) else 'Primera reunión',
-                                    'program_proposed': str(row.get('program_proposed', 'Demo')).strip() if pd.notna(row.get('program_proposed')) else 'Demo',
-                                    'proposal_value': float(row.get('proposal_value', 0)) if pd.notna(row.get('proposal_value')) and str(row.get('proposal_value')).replace('.','').replace(',','').isdigit() else 0.0,
-                                    'contract_start_date': str(row.get('contract_start_date')) if pd.notna(row.get('contract_start_date')) else None,
-                                    'contract_end_date': str(row.get('contract_end_date')) if pd.notna(row.get('contract_end_date')) else None,
-                                    'observations': str(row.get('observations', '')).strip() if pd.notna(row.get('observations')) else '',
-                                    'assigned_commercial': str(row.get('assigned_commercial', '')).strip() if pd.notna(row.get('assigned_commercial')) else '',
-                                    'no_interest_reason': None
-                                })
-                                
-                                # Save institution
-                                save_institution(inst)
-                                success_count += 1
-                                
-                            except Exception as e:
-                                error_count += 1
-                                errors.append(f"Fila {index + 2}: {str(e)}")
+                        if st.button("🚀 Procesar y cargar instituciones", type="primary"):
+                            progress_bar = st.progress(0)
+                            success_count = 0
+                            error_count = 0
+                            errors = []
+                            warnings = []
                             
-                            # Update progress
-                            progress = (index + 1) / len(valid_df)
-                            progress_bar.progress(progress)
-                        
-                        # Show results
-                        st.success(f"Proceso completado!")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("✅ Instituciones cargadas", success_count)
-                        with col2:
-                            st.metric("❌ Errores", error_count)
-                        
-                        if errors:
-                            with st.expander("Ver errores detallados"):
+                            # Process rows with names
+                            valid_df = df_upload.dropna(subset=['name'])
+                            
+                            for index, row in valid_df.iterrows():
+                                try:
+                                    # Create institution dict - only name is truly required
+                                    inst = {
+                                        'id': str(uuid.uuid4()),
+                                        'name': str(row['name']).strip(),
+                                    }
+                                    
+                                    # Add required fields with defaults if missing
+                                    inst['rector_name'] = str(row.get('rector_name', 'Rector Sin Definir')).strip() if pd.notna(row.get('rector_name')) else 'Rector Sin Definir'
+                                    inst['rector_email'] = str(row.get('rector_email', 'rector-sin-email@temp.com')).strip() if pd.notna(row.get('rector_email')) else 'rector-sin-email@temp.com'
+                                    inst['rector_phone'] = str(row.get('rector_phone', '+593 000000000')).strip() if pd.notna(row.get('rector_phone')) else '+593 000000000'
+                                    inst['contraparte_name'] = str(row.get('contraparte_name', 'Contraparte Sin Definir')).strip() if pd.notna(row.get('contraparte_name')) else 'Contraparte Sin Definir'
+                                    inst['contraparte_email'] = str(row.get('contraparte_email', 'contraparte-sin-email@temp.com')).strip() if pd.notna(row.get('contraparte_email')) else 'contraparte-sin-email@temp.com'
+                                    inst['contraparte_phone'] = str(row.get('contraparte_phone', '+593 000000000')).strip() if pd.notna(row.get('contraparte_phone')) else '+593 000000000'
+                                    
+                                    # Track what was filled with defaults
+                                    defaults_used = []
+                                    if inst['rector_name'] == 'Rector Sin Definir':
+                                        defaults_used.append('rector_name')
+                                    if 'sin-email@temp.com' in inst['rector_email']:
+                                        defaults_used.append('rector_email')
+                                    if '000000000' in inst['rector_phone']:
+                                        defaults_used.append('rector_phone')
+                                    if inst['contraparte_name'] == 'Contraparte Sin Definir':
+                                        defaults_used.append('contraparte_name')
+                                    if 'sin-email@temp.com' in inst['contraparte_email']:
+                                        defaults_used.append('contraparte_email')
+                                    if '000000000' in inst['contraparte_phone']:
+                                        defaults_used.append('contraparte_phone')
+                                    
+                                    if defaults_used:
+                                        warnings.append(f"Institución '{inst['name']}': Se usaron valores por defecto para: {', '.join(defaults_used)}")
+                                    
+                                    # Add optional fields with defaults
+                                    inst.update({
+                                        'website': str(row.get('website', '')).strip() if pd.notna(row.get('website')) else '',
+                                        'pais': str(row.get('pais', 'Ecuador')).strip() if pd.notna(row.get('pais')) else 'Ecuador',
+                                        'ciudad': str(row.get('ciudad', '')).strip() if pd.notna(row.get('ciudad')) else '',
+                                        'direccion': str(row.get('direccion', '')).strip() if pd.notna(row.get('direccion')) else '',
+                                        'created_contact': str(now_date()),
+                                        'last_interaction': str(now_date()),
+                                        'num_teachers': int(float(row.get('num_teachers', 0))) if pd.notna(row.get('num_teachers')) and str(row.get('num_teachers')).replace('.','').replace(',','').isdigit() else 0,
+                                        'num_students': int(float(row.get('num_students', 0))) if pd.notna(row.get('num_students')) and str(row.get('num_students')).replace('.','').replace(',','').isdigit() else 0,
+                                        'avg_fee': float(str(row.get('avg_fee', 0)).replace(',', '.')) if pd.notna(row.get('avg_fee')) else 0.0,
+                                        'initial_contact_medium': str(row.get('initial_contact_medium', 'Whatsapp')).strip() if pd.notna(row.get('initial_contact_medium')) else 'Whatsapp',
+                                        'stage': str(row.get('stage', 'Abierto')).strip() if pd.notna(row.get('stage')) else 'Abierto',
+                                        'substage': str(row.get('substage', 'Primera reunión')).strip() if pd.notna(row.get('substage')) else 'Primera reunión',
+                                        'program_proposed': str(row.get('program_proposed', 'Demo')).strip() if pd.notna(row.get('program_proposed')) else 'Demo',
+                                        'proposal_value': float(str(row.get('proposal_value', 0)).replace(',', '.')) if pd.notna(row.get('proposal_value')) else 0.0,
+                                        'contract_start_date': str(row.get('contract_start_date')) if pd.notna(row.get('contract_start_date')) else None,
+                                        'contract_end_date': str(row.get('contract_end_date')) if pd.notna(row.get('contract_end_date')) else None,
+                                        'observations': str(row.get('observations', '')).strip() if pd.notna(row.get('observations')) else '',
+                                        'assigned_commercial': str(row.get('assigned_commercial', '')).strip() if pd.notna(row.get('assigned_commercial')) else '',
+                                        'no_interest_reason': None
+                                    })
+                                    
+                                    # Save institution
+                                    save_institution(inst)
+                                    success_count += 1
+                                    
+                                except Exception as e:
+                                    error_count += 1
+                                    errors.append(f"Fila {index + 2}: {str(e)}")
+                                
+                                # Update progress
+                                progress = (index + 1) / len(valid_df)
+                                progress_bar.progress(progress)
+                            
+
+                            # Show results
+                            st.success(f"✅ Proceso completado!")
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("✅ Instituciones cargadas", success_count)
+                            with col2:
+                                st.metric("❌ Errores", error_count)
+                            with col3:
+                                st.metric("⚠️ Con valores por defecto", len(warnings))
+                            
+
+                            if warnings:
+                                st.markdown("**Instituciones con valores por defecto:**")
+                                for warning in warnings:
+                                    st.warning(warning)
+                                st.info("💡 Puedes editar estos valores en el Panel Admin después de la carga.")
+                            
+                            if errors:
+                                st.markdown("**Errores detallados:**")
                                 for error in errors:
                                     st.error(error)
-                        
-                        if success_count > 0:
-                            st.balloons()
+                            
+                            if success_count > 0:
+                                st.balloons()
+                                st.success("🎉 ¡Carga completada! Ve al Panel Admin para revisar y editar las instituciones cargadas.")
+                                st.info("🔄 Recarga la página para ver las nuevas instituciones en el sistema.")
+                    else:
+                        st.error("❌ No hay filas válidas para procesar. Asegúrate de que al menos la columna 'name' tenga datos.")
                         
             except Exception as e:
-                st.error(f"Error al procesar el archivo: {str(e)}")
+                st.error(f"❌ Error al procesar el archivo: {str(e)}")
+                st.info("💡 Verifica que el archivo no esté corrupto y tenga el formato correcto.")
 
 # ----------------------
 # Page: Kanban board
@@ -573,7 +765,7 @@ if menu == 'Panel Admin':
                             proposal_value_edit = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) else 0.0, key=f'proposal_{row["id"]}')
                         with col2:
                             assigned_commercial_edit = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '', key=f'assign_{row["id"]}')
-                        
+        
                         # CONTRATO section
                         st.markdown('**CONTRATO**')
                         col1, col2 = st.columns(2)
