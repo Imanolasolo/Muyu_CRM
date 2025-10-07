@@ -4,6 +4,17 @@ from datetime import datetime, timedelta
 import pandas as pd
 import altair as alt
 import uuid
+import jwt
+import hashlib
+import secrets
+from typing import Optional, Dict, Any
+
+# ----------------------
+# JWT Authentication Configuration
+# ----------------------
+JWT_SECRET = "muyu-crm-secret-key-change-in-production"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
 
 # ----------------------
 # Database utilities
@@ -18,6 +29,22 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c = conn.cursor()
+    
+    # Users table for authentication
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'sales',
+        full_name TEXT,
+        created_at DATE DEFAULT CURRENT_DATE,
+        last_login DATE,
+        is_active INTEGER DEFAULT 1
+    )
+    ''')
     
     # Check if table exists and get its columns
     c.execute("PRAGMA table_info(institutions)")
@@ -104,6 +131,295 @@ def init_db():
     conn.close()
 
 init_db()
+
+# ----------------------
+# JWT Authentication Functions  
+# ----------------------
+
+def hash_password(password: str, salt: str = None) -> tuple:
+    """Hash password using SHA-256 with salt"""
+    if salt is None:
+        salt = secrets.token_hex(32)
+    
+    # Combine password and salt
+    salted_password = password + salt
+    # Hash using SHA-256
+    hashed = hashlib.sha256(salted_password.encode()).hexdigest()
+    
+    return hashed, salt
+
+def verify_password(password: str, hashed_password: str, salt: str) -> bool:
+    """Verify password against hash"""
+    test_hash, _ = hash_password(password, salt)
+    return test_hash == hashed_password
+
+def create_token(user_data: Dict[str, Any]) -> str:
+    """Create JWT token for user"""
+    payload = {
+        "user_id": user_data["id"],
+        "username": user_data["username"],
+        "email": user_data["email"],
+        "role": user_data["role"],
+        "full_name": user_data.get("full_name", ""),
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
+        "iat": datetime.utcnow()
+    }
+    
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return token
+
+def decode_token(token: str) -> Optional[Dict[str, Any]]:
+    """Decode and validate JWT token"""
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        st.error("Sesión expirada. Por favor, inicia sesión nuevamente.")
+        return None
+    except jwt.InvalidTokenError:
+        st.error("Token inválido. Por favor, inicia sesión nuevamente.")
+        return None
+
+def is_logged_in() -> bool:
+    """Check if user is logged in"""
+    return "jwt_token" in st.session_state and st.session_state.jwt_token is not None
+
+def get_current_user() -> Optional[Dict[str, Any]]:
+    """Get current user from session"""
+    if not is_logged_in():
+        return None
+    
+    token = st.session_state.jwt_token
+    user_data = decode_token(token)
+    
+    if user_data is None:
+        # Token invalid, clear session
+        logout()
+        return None
+    
+    return user_data
+
+def login_user(token: str) -> None:
+    """Login user by storing JWT token in session"""
+    st.session_state.jwt_token = token
+    st.session_state.logged_in = True
+
+def logout() -> None:
+    """Logout user by clearing session"""
+    if "jwt_token" in st.session_state:
+        del st.session_state.jwt_token
+    if "logged_in" in st.session_state:
+        del st.session_state.logged_in
+    st.rerun()
+
+def create_user(username: str, email: str, password: str, role: str, full_name: str = "") -> tuple:
+    """Create new user"""
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        
+        # Check if username or email already exists
+        c.execute("SELECT id FROM users WHERE username = ? OR email = ?", (username, email))
+        if c.fetchone():
+            return False, "Usuario o email ya existe"
+        
+        # Hash password
+        password_hash, salt = hash_password(password)
+        
+        # Create user
+        user_id = str(uuid.uuid4())
+        c.execute('''
+        INSERT INTO users (id, username, email, password_hash, salt, role, full_name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, username, email, password_hash, salt, role, full_name, datetime.now().date()))
+        
+        conn.commit()
+        conn.close()
+        
+        return True, "Usuario creado exitosamente"
+        
+    except Exception as e:
+        return False, f"Error al crear usuario: {str(e)}"
+
+def authenticate_user(username: str, password: str) -> tuple:
+    """Authenticate user credentials"""
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        
+        # Get user data
+        c.execute('''
+        SELECT id, username, email, password_hash, salt, role, full_name, is_active
+        FROM users 
+        WHERE username = ? AND is_active = 1
+        ''', (username,))
+        
+        user = c.fetchone()
+        if not user:
+            return False, None, "Usuario no encontrado o inactivo"
+        
+        # Verify password
+        if not verify_password(password, user['password_hash'], user['salt']):
+            return False, None, "Contraseña incorrecta"
+        
+        # Update last login
+        c.execute("UPDATE users SET last_login = ? WHERE id = ?", (datetime.now().date(), user['id']))
+        conn.commit()
+        
+        # Create user data dict
+        user_data = {
+            "id": user['id'],
+            "username": user['username'],
+            "email": user['email'],
+            "role": user['role'],
+            "full_name": user['full_name']
+        }
+        
+        conn.close()
+        return True, user_data, "Login exitoso"
+        
+    except Exception as e:
+        return False, None, f"Error en autenticación: {str(e)}"
+
+def create_admin_user():
+    """Create default admin user if none exists"""
+    conn = get_conn()
+    c = conn.cursor()
+    
+    # Check if admin user exists
+    c.execute("SELECT id FROM users WHERE role = 'admin'")
+    if c.fetchone():
+        conn.close()
+        return False, "Usuario admin ya existe"
+    
+    # Create admin user
+    success, message = create_user(
+        username="admin",
+        email="admin@muyu.com",
+        password="admin123",  # Change this in production!
+        role="admin",
+        full_name="Administrador CRM"
+    )
+    
+    conn.close()
+    return success, message
+
+def show_login_page():
+    st.image('assets/muyu_logo_2.png', width=200)
+    
+    st.markdown("## Iniciar Sesión")
+    
+    # Crear dos columnas para login e instrucciones
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        with st.expander("🔐 Acceder al Sistema", expanded=False):
+            with st.form("login_form"):
+                st.markdown("### Ingresa tus credenciales")
+                
+                username = st.text_input("Usuario", placeholder="Ingresa tu usuario")
+                password = st.text_input("Contraseña", type="password", placeholder="Ingresa tu contraseña")
+                
+                login_button = st.form_submit_button("🚀 Iniciar Sesión", use_container_width=True)
+    
+    with col2:
+        with st.expander("📋 Instrucciones de Acceso", expanded=False):
+            st.markdown("""
+            ### 🚀 Cómo acceder al CRM
+            
+            **1. Obtener credenciales:**
+            - Contacta al administrador del sistema
+            - Solicita tu usuario y contraseña
+            
+            **2. Iniciar sesión:**
+            - Expande el panel "Acceder al Sistema"
+            - Ingresa tu usuario y contraseña
+            - Haz clic en "Iniciar Sesión"
+            
+            **3. Primer acceso:**
+            - Verifica tu rol asignado
+            - Explora las funcionalidades disponibles
+            - Cambia tu contraseña si es necesario
+            
+            **4. ¿Problemas de acceso?**
+            - Verifica que las credenciales sean correctas
+            - Contacta al administrador si persisten los problemas
+            
+            💡 **Tip:** Tu sesión se mantendrá activa por 24 horas
+            """)
+    
+    
+    if login_button:
+        if username and password:
+            success, user_data, message = authenticate_user(username, password)
+            
+            if success:
+                # Create JWT token
+                token = create_token(user_data)
+                login_user(token)
+                
+                st.success(f"¡Bienvenido {user_data['full_name'] or user_data['username']}!")
+                st.info(f"Rol: {user_data['role'].title()}")
+                st.rerun()
+            else:
+                st.error(message)
+        else:
+            st.error("Por favor ingresa usuario y contraseña")
+        
+    # Show role descriptions
+    st.markdown("---")
+    
+    with st.expander("👥 Información de Roles de Usuario", expanded=False):
+        st.markdown("### Tipos de acceso disponibles en el sistema")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("""
+            #### 👑 Administrador
+            - Acceso completo al CRM
+            - Gestión de usuarios
+            - Todas las funcionalidades
+            - Reportes avanzados
+            """)
+        
+        with col2:
+            st.markdown("""
+            #### 💼 Ventas
+            - Gestión del CRM
+            - Seguimiento de clientes
+            - Tareas de seguimiento
+            - Métricas de ventas
+            """)
+        
+        with col3:
+            st.markdown("""
+            #### 🎧 Soporte
+            - Gestión de tickets
+            - Chat de soporte
+            - Base de conocimiento
+            - Atención al cliente
+            """)
+    
+    # Footer compacto
+    st.markdown("---")
+    
+    footer_col1, footer_col2, footer_col3 = st.columns([1, 2, 1])
+    
+    with footer_col2:
+        st.markdown(
+            """
+            <div style='text-align: center; padding: 8px; color: #666; background-color: #f8f9fa; border-radius: 6px;'>
+                <p style='margin: 0; font-size: 14px; color: #2E86AB;'>
+                    <strong> Muyu CRM</strong> | 
+                    📧 <a href='mailto:imanolasolo@muyueducation.com' style='color: #2E86AB; text-decoration: none;'>support</a> | 
+                    🌐 <a href='https://www.muyueducation.com' target='_blank' style='color: #2E86AB; text-decoration: none;'>web</a> | 
+                    © 2025 v1.0.23
+                </p>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
 
 # ----------------------
 # Helpers
@@ -215,6 +531,30 @@ def create_task(institution_id, title, due_date, notes=None):
     conn.commit()
     conn.close()
 
+def get_available_users():
+    """Obtiene lista de usuarios activos para asignar como responsables"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('SELECT username, full_name, role FROM users WHERE is_active = 1 ORDER BY full_name, username')
+    users = c.fetchall()
+    conn.close()
+    
+    # Crear lista de opciones para el selectbox
+    user_options = ["Sin asignar"]
+    user_mapping = {"Sin asignar": ""}
+    
+    for user in users:
+        username = user[0]
+        full_name = user[1] if user[1] else username
+        role = user[2]
+        
+        # Formato: "Nombre Completo (username) - Rol"
+        display_name = f"{full_name} ({username}) - {role.title()}"
+        user_options.append(display_name)
+        user_mapping[display_name] = username
+    
+    return user_options, user_mapping
+
 # ----------------------
 # UI: Sidebar - quick filters + create institution
 # ----------------------
@@ -307,25 +647,100 @@ observer.observe(document.body, {
 </script>
 """, unsafe_allow_html=True)
 
-st.title('CRM Comercial — MUYU Education')
+# ----------------------
+# Main Application Logic
+# ----------------------
 
-st.sidebar.image('assets/muyu_logo.jpg', use_container_width=True)
-menu = st.sidebar.selectbox('Navegación', ['Panel Admin', 'Registrar institución', 'Buscar / Editar', 'Dashboard', 'Tareas & Alertas'])
+# Check authentication first
+if not is_logged_in():
+    show_login_page()
+    st.stop()
 
-# Quick filters
+# Get current user
+current_user = get_current_user()
+if not current_user:
+    st.error("Error de autenticación. Por favor, inicia sesión nuevamente.")
+    st.stop()
+
+# Display main application
+st.title('CRM Comercial — :orange[MUYU Education]')
+
+# Sidebar with user info and logout
+st.sidebar.image('assets/muyu_logo_2.png', use_container_width=True)
+
+# User info in sidebar
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 👤 Usuario Actual")
+st.sidebar.markdown(f"**Nombre:** {current_user['full_name'] or current_user['username']}")
+st.sidebar.markdown(f"**Email:** {current_user['email']}")
+
+# Role badge
+role_colors = {
+    "admin": "🔴",
+    "sales": "🟢", 
+    "support": "🔵"
+}
+role_icon = role_colors.get(current_user['role'], "⚪")
+st.sidebar.markdown(f"**Rol:** {role_icon} {current_user['role'].title()}")
+
+# Logout button
+if st.sidebar.button("🚪 Cerrar Sesión"):
+    logout()
+
+st.sidebar.markdown("---")
+
+# Quick filters (stored in session state for dashboard access)
 st.sidebar.header('Filtros rápidos')
 filter_stage = st.sidebar.multiselect('Etapa', options=['En cola','En Proceso','Ganado','No interesado'], default=None)
 filter_medium = st.sidebar.multiselect('Medio contacto', options=['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'], default=None)
 
+# Store filters in session state for dashboard access
+st.session_state.filter_stage = filter_stage
+st.session_state.filter_medium = filter_medium
+
 # Filtros rápidos por país y ciudad
-df_all = fetch_institutions_df()
-filter_pais = st.sidebar.multiselect('País', options=sorted(df_all['pais'].dropna().unique()), default=None)
-filter_ciudad = st.sidebar.multiselect('Ciudad', options=sorted(df_all['ciudad'].dropna().unique()), default=None)
+try:
+    df_all = fetch_institutions_df()
+    filter_pais = st.sidebar.multiselect('País', options=sorted(df_all['pais'].dropna().unique()), default=None)
+    filter_ciudad = st.sidebar.multiselect('Ciudad', options=sorted(df_all['ciudad'].dropna().unique()), default=None)
+    
+    # Store in session state
+    st.session_state.filter_pais = filter_pais
+    st.session_state.filter_ciudad = filter_ciudad
+except:
+    # In case there's an issue with the database
+    st.session_state.filter_pais = []
+    st.session_state.filter_ciudad = []
+
+st.sidebar.markdown("---")
+
+# Navigation menu based on role
+user_role = current_user['role']
+if user_role == 'admin':
+    # Admin gets access to specialized dashboard
+    from dashboards.admin_dashboard import show_admin_dashboard
+    show_admin_dashboard()
+    st.stop()  # Don't show the rest of the interface
+elif user_role == 'sales':
+    # Sales gets access to specialized sales dashboard
+    from dashboards.sales_dashboard import render_sales_dashboard
+    render_sales_dashboard(current_user)
+    st.stop()  # Don't show the rest of the interface
+else:  # support
+    menu_options = ['Dashboard', 'Tareas & Alertas', 'Panel Admin']
+
+menu = st.sidebar.selectbox('Navegación', menu_options)
 
 # ----------------------
 # Page: Registrar institución
 # ----------------------
 if menu == 'Registrar institución':
+    # Check role permissions
+    if current_user['role'] not in ['admin', 'sales']:
+        st.error("❌ No tienes permisos para acceder a esta sección.")
+        st.info("Esta sección está disponible solo para roles de Administrador y Ventas.")
+        st.stop()
+    
     st.header('Registrar nueva institución')
     with st.expander('Formulario de registro de institución', expanded=False):
         name = st.text_input('Nombre de la institución', max_chars=200)
@@ -383,7 +798,10 @@ if menu == 'Registrar institución':
         with col1:
             proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f")
         with col2:
-            assigned_commercial = st.text_input('Responsable comercial')
+            # Obtener usuarios disponibles
+            user_options, user_mapping = get_available_users()
+            assigned_commercial_display = st.selectbox('Responsable comercial', options=user_options, index=0)
+            assigned_commercial = user_mapping[assigned_commercial_display]
         
         # CONTRATO section
         st.markdown('**CONTRATO**')
@@ -778,7 +1196,16 @@ if menu == 'Registrar institución':
 # Page: Kanban board
 # ----------------------
 if menu == 'Panel Admin':
-    st.header('Panel Admin — Ciclo de vida de leads')
+    # Role-based header
+    if current_user['role'] == 'admin':
+        st.header('👑 Panel Admin — Ciclo de vida de leads')
+        st.info("🔧 Acceso completo de administrador: puedes ver y editar todas las instituciones")
+    elif current_user['role'] == 'sales':
+        st.header('💼 Panel Ventas — Gestión de leads')
+        st.info("💼 Vista de ventas: puedes gestionar instituciones y seguimiento comercial")
+    else:  # support
+        st.header('🎧 Panel Soporte — Vista de instituciones')
+        st.info("🎧 Vista de soporte: consulta de información para atención al cliente")
     df = fetch_institutions_df()
     if not df.empty:
         # Apply filters
@@ -875,7 +1302,23 @@ if menu == 'Panel Admin':
                         with col1:
                             proposal_value_edit = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) else 0.0, key=f'proposal_{row["id"]}')
                         with col2:
-                            assigned_commercial_edit = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '', key=f'assign_{row["id"]}')
+                            # Obtener usuarios disponibles con manejo de errores
+                            try:
+                                user_options, user_mapping = get_available_users()
+                                current_assigned = row.get('assigned_commercial') or ''
+                                
+                                # Encontrar el índice del usuario actual
+                                current_index = 0
+                                for i, option in enumerate(user_options):
+                                    if user_mapping[option] == current_assigned:
+                                        current_index = i
+                                        break
+                                
+                                assigned_commercial_display = st.selectbox('👤 Responsable comercial', options=user_options, index=current_index, key=f'assign_{row["id"]}')
+                                assigned_commercial_edit = user_mapping[assigned_commercial_display]
+                            except Exception as e:
+                                st.error(f"Error al cargar usuarios: {str(e)}")
+                                assigned_commercial_edit = st.text_input('👤 Responsable comercial (fallback)', value=row.get('assigned_commercial', ''), key=f'assign_fallback_{row["id"]}')
         
                         # CONTRATO section
                         st.markdown('**CONTRATO**')
@@ -940,6 +1383,12 @@ if menu == 'Panel Admin':
 # Page: Buscar / Editar
 # ----------------------
 if menu == 'Buscar / Editar':
+    # Check role permissions
+    if current_user['role'] not in ['admin', 'sales']:
+        st.error("❌ No tienes permisos para acceder a esta sección.")
+        st.info("Esta sección está disponible solo para roles de Administrador y Ventas.")
+        st.stop()
+    
     st.header('Buscar o editar instituciones')
     q = st.text_input('Buscar por nombre, rector o email')
     df = fetch_institutions_df()
@@ -1037,7 +1486,19 @@ if menu == 'Buscar / Editar':
                 with col1:
                     proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f", value=float(row['proposal_value']) if not pd.isna(row['proposal_value']) and str(row['proposal_value']).replace('.','',1).isdigit() else 0.0, key=f'proposal_{row["id"]}')
                 with col2:
-                    assigned_commercial = st.text_input('Responsable comercial', value=row.get('assigned_commercial') or '')
+                    # Obtener usuarios disponibles
+                    user_options, user_mapping = get_available_users()
+                    current_assigned = row.get('assigned_commercial') or ''
+                    
+                    # Encontrar el índice del usuario actual
+                    current_index = 0
+                    for i, option in enumerate(user_options):
+                        if user_mapping[option] == current_assigned:
+                            current_index = i
+                            break
+                    
+                    assigned_commercial_display = st.selectbox('Responsable comercial', options=user_options, index=current_index)
+                    assigned_commercial = user_mapping[assigned_commercial_display]
                 
                 # CONTRATO section
                 st.markdown('**CONTRATO**')
@@ -1135,19 +1596,40 @@ if menu == 'Dashboard':
 # Page: Tareas & Alertas
 # ----------------------
 if menu == 'Tareas & Alertas':
-    st.header('Tareas y alertas automatizadas')
+    # Role-based header
+    if current_user['role'] == 'admin':
+        st.header('👑 Tareas y alertas automatizadas — Admin')
+    elif current_user['role'] == 'sales':
+        st.header('💼 Mis tareas de ventas')
+    else:  # support
+        st.header('🎧 Tareas de soporte')
+    
     conn = get_conn()
-    tasks = pd.read_sql_query('''
-        SELECT t.id, i.name as institucion, t.title, t.due_date, t.done, t.created_at, t.notes
-        FROM tasks t LEFT JOIN institutions i ON t.institution_id = i.id
-        ORDER BY t.due_date ASC
-    ''', conn, parse_dates=['due_date','created_at'])
+    
+    # Filter tasks based on role (admins see all, others see filtered)
+    if current_user['role'] == 'admin':
+        tasks = pd.read_sql_query('''
+            SELECT t.id, i.name as institucion, t.title, t.due_date, t.done, t.created_at, t.notes
+            FROM tasks t LEFT JOIN institutions i ON t.institution_id = i.id
+            ORDER BY t.due_date ASC
+        ''', conn, parse_dates=['due_date','created_at'])
+    else:
+        # For sales and support, could filter by assigned_commercial or other criteria
+        tasks = pd.read_sql_query('''
+            SELECT t.id, i.name as institucion, t.title, t.due_date, t.done, t.created_at, t.notes
+            FROM tasks t LEFT JOIN institutions i ON t.institution_id = i.id
+            ORDER BY t.due_date ASC
+        ''', conn, parse_dates=['due_date','created_at'])
+    
     conn.close()
-    # Sección para autenticación de admin para borrar tareas
-    st.markdown("### Borrar tareas (solo admin)")
-    admin_user = st.text_input("Usuario admin", key="admin_user")
-    admin_pass = st.text_input("Contraseña admin", type="password", key="admin_pass")
-    is_admin = (admin_user == "admin" and admin_pass == "admin123")
+    
+    # Admin controls (only for admin role)
+    if current_user['role'] == 'admin':
+        st.markdown("### 🗑️ Gestión de tareas (Admin)")
+        st.info("Como administrador, puedes eliminar tareas directamente")
+        is_admin = True
+    else:
+        is_admin = False
     if tasks.empty:
         st.info('No hay tareas registradas')
     else:
