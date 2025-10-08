@@ -305,8 +305,11 @@ def create_admin_user():
     return success, message
 
 def show_login_page():
-    st.image('assets/muyu_logo_2.png', width=200)
-    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.image('assets/muyu_logo_2.png', width=200)
+    with col2:
+        st.markdown("# Bienvenido a :orange[Muyu CRM], tu aliado en la gestión de leads")
     st.markdown("## Iniciar Sesión")
     
     # Crear dos columnas para login e instrucciones

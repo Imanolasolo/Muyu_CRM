@@ -556,7 +556,10 @@ def show_my_metrics(username):
     
     if not df.empty:
         # Filtrar instituciones sin contacto reciente (más de 7 días)
-        df['days_since_contact'] = (datetime.now() - pd.to_datetime(df['last_interaction'])).dt.days
+        # Ensure both datetime objects are timezone-naive for proper subtraction
+        current_time = datetime.now()
+        df['last_interaction_dt'] = pd.to_datetime(df['last_interaction']).dt.tz_localize(None)
+        df['days_since_contact'] = (current_time - df['last_interaction_dt']).dt.days
         stale_institutions = df[df['days_since_contact'] > 7]
         
         if not stale_institutions.empty:
