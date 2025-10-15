@@ -47,7 +47,8 @@ def ensure_admin_alerts_table():
 # ----------------------
 # Email Configuration (Hardcoded)
 # ----------------------
-ADMIN_EMAIL = "jjusturi@gmail.com"  # Cambia por el email real del administrador
+ADMIN_EMAIL = st.secrets["ADMIN_EMAIL"]  # Se obtiene de .streamlit/secrets.toml
+ADMIN_APP_PASSWORD = st.secrets["ADMIN_APP_PASSWORD"]  # Se obtiene de .streamlit/secrets.toml
 def get_conn():
     conn = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES)
     conn.row_factory = sqlite3.Row
@@ -1276,9 +1277,35 @@ def create_task(institution_id, title, due_date, notes=''):
             INSERT INTO tasks (id, institution_id, title, due_date, notes, done, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (task_id, institution_id, title, due_date_str, notes, 0, created_at))
-        
         conn.commit()
         conn.close()
+
+        # --- Notificación por email al responsable si está asignado ---
+        # Buscar email del responsable en las notas (formato: Email: ...)
+        import re
+        email_match = re.search(r"Email:\s*([\w\.-]+@[\w\.-]+)", notes or "")
+        if email_match:
+            responsable_email = email_match.group(1)
+            # Buscar nombre/usuario
+            name_match = re.search(r"Responsable:\s*([^\n]+)", notes or "")
+            responsable_name = name_match.group(1) if name_match else responsable_email
+            # Construir info para email
+            responsable_info = {
+                'email': responsable_email,
+                'full_name': responsable_name,
+                'username': responsable_email,
+                'role': ''
+            }
+            # Construir datos de la tarea
+            task_data = {
+                'title': title,
+                'institucion': institution_id,
+                'due_date': due_date,
+                'done': False,
+                'notes': notes or ''
+            }
+            send_task_email(task_data, responsable_info)
+
         return True
         
     except Exception as e:
