@@ -16,21 +16,44 @@ import smtplib
 import email.mime.text
 import email.mime.multipart
 
+
 # ----------------------
 # Database utilities
 # ----------------------
 DB_PATH = "muyu_crm.db"
 
+# Crear tabla de alertas si no existe
+def ensure_admin_alerts_table():
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS admin_alerts (
+            id TEXT PRIMARY KEY,
+            institution_id TEXT,
+            institution_name TEXT,
+            changed_by TEXT,
+            change_type TEXT,
+            old_value TEXT,
+            new_value TEXT,
+            change_date TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Asegurarse de que la tabla existe DESPUÉS de definir get_conn
+
+
 # ----------------------
 # Email Configuration (Hardcoded)
 # ----------------------
 ADMIN_EMAIL = "jjusturi@gmail.com"  # Cambia por el email real del administrador
-ADMIN_APP_PASSWORD = "qops yine aeup uxdf"  # Cambia por la contraseña de aplicación real
-
 def get_conn():
     conn = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES)
     conn.row_factory = sqlite3.Row
     return conn
+
+ensure_admin_alerts_table()
 
 # ----------------------
 # Helpers
@@ -1270,11 +1293,10 @@ def show_registrar_institucion():
     """Página para registrar nueva institución"""
     st.header('➕ Registrar nueva institución')
     
+
     with st.expander('📝 Formulario de registro de institución', expanded=False):
         name = st.text_input('Nombre de la institución', max_chars=200)
-        
-        # CONTACTO section
-        st.markdown('**👤 Rector (Obligatorio)**')
+        st.markdown('**Rector (Obligatorio)**')
         rector_name = st.text_input('Nombre del Rector*', key='rector_name_reg')
         rector_email = st.text_input('Email del Rector*', key='rector_email_reg')
         col1, col2 = st.columns([1, 2])
@@ -1284,8 +1306,7 @@ def show_registrar_institucion():
                 key='rector_country_reg')
         with col2:
             rector_phone = st.text_input('Celular del Rector* (sin código país)', key='rector_phone_reg', placeholder='987654321')
-        
-        st.markdown('**👥 Contraparte (Obligatorio)**')
+        st.markdown('**Contraparte (Obligatorio)**')
         contraparte_name = st.text_input('Nombre de la Contraparte*', key='contraparte_name_reg')
         contraparte_email = st.text_input('Email de la Contraparte*', key='contraparte_email_reg')
         col1, col2 = st.columns([1, 2])
@@ -1295,7 +1316,6 @@ def show_registrar_institucion():
                 key='contraparte_country_reg')
         with col2:
             contraparte_phone = st.text_input('Celular de la Contraparte* (sin código país)', key='contraparte_phone_reg', placeholder='987654321')
-        
         website = st.text_input('Página web')
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1304,62 +1324,50 @@ def show_registrar_institucion():
             ciudad = st.text_input('Ciudad')
         with col3:
             direccion = st.text_input('Dirección')
-        
         col1, col2 = st.columns(2)
         with col1:
-            created_contact = st.date_input('Fecha de creación de contacto', value=now_date())
+            from datetime import date
+            created_contact = st.date_input('Fecha de creación de contacto', value=date.today())
         with col2:
-            last_interaction = st.date_input('Fecha última interacción', value=now_date())
-        
+            last_interaction = st.date_input('Fecha última interacción', value=date.today())
         col1, col2 = st.columns(2)
         with col1:
             num_teachers = st.number_input('Número de docentes', min_value=0, step=1)
         with col2:
             num_students = st.number_input('Número de estudiantes', min_value=0, step=1)
-        
         col1, col2 = st.columns(2)
         with col1:
             avg_fee = st.number_input('Valor de la pensión promedio', min_value=0.0, format="%.2f")
         with col2:
             initial_contact_medium = st.selectbox('Medio de contacto', ['Whatsapp','Correo electrónico','Llamada','Evento','Referido','Reunión virtual','Reunión presencial','Email marketing','Redes Sociales'])
-        
         stage = st.selectbox('Etapa', ['En cola','En Proceso','Ganado','No interesado'])
         substage = st.selectbox('Subetapa', ['Primera reunión','Envío propuesta','Negociación','Sin respuesta','No interesado','Stand by','Reunión agendada','Revisión contrato','Contrato firmado','Factura emitida','Pago recibido'])
         program_proposed = st.selectbox('Programa propuesto', ['Programa Muyu Lab','Programa Piloto Muyu Lab','Programa Muyu App','Programa Piloto Muyu App','Muyu Scale Lab','Programa Piloto Muyu ScaleLab','Demo'])
-        
         col1, col2 = st.columns(2)
         with col1:
             proposal_value = st.number_input('Valor propuesta (opcional)', min_value=0.0, format="%.2f")
         with col2:
-            # Obtener usuarios disponibles
             user_options, user_mapping = get_available_users()
             assigned_commercial_display = st.selectbox('Responsable comercial', options=user_options, index=0)
             assigned_commercial = user_mapping[assigned_commercial_display]
-        
-        # CONTRATO section
-        st.markdown('**📄 CONTRATO**')
+        st.markdown('**CONTRATO**')
         col1, col2 = st.columns(2)
         with col1:
             contract_start_date = st.date_input('Inicio de contrato', value=None, key='contract_start_reg')
         with col2:
             contract_end_date = st.date_input('Fin de contrato', value=None, key='contract_end_reg')
-        
         observations = st.text_area('Observaciones')
-        
-        guardar = st.button('💾 Guardar institución', type='primary')
-        
+        guardar = st.button('Guardar institución')
         if guardar:
             if not name:
-                st.error('❌ El nombre de la institución es obligatorio')
+                st.error('El nombre de la institución es obligatorio')
             elif not rector_name or not rector_email or not rector_phone:
-                st.error('❌ Todos los campos del Rector son obligatorios')
+                st.error('Todos los campos del Rector son obligatorios')
             elif not contraparte_name or not contraparte_email or not contraparte_phone:
-                st.error('❌ Todos los campos de la Contraparte son obligatorios')
+                st.error('Todos los campos de la Contraparte son obligatorios')
             else:
-                # Extract country codes
                 rector_full_phone = rector_country_code.split(' ')[1] + ' ' + rector_phone
                 contraparte_full_phone = contraparte_country_code.split(' ')[1] + ' ' + contraparte_phone
-                
                 inst = {
                     'id': str(uuid.uuid4()),
                     'name': name,
@@ -1390,7 +1398,229 @@ def show_registrar_institucion():
                     'assigned_commercial': assigned_commercial
                 }
                 save_institution(inst)
-                st.success('✅ Institución guardada correctamente')
+                st.success('Institución guardada correctamente')
+
+    # Expander de carga masiva justo debajo del formulario
+    with st.expander('📥 Carga masiva de instituciones', expanded=False):
+        st.markdown("""
+        **Instrucciones:**
+        - Descarga primero el template Excel para conocer el formato exacto
+        - Sube un archivo Excel (.xlsx, .xls) o CSV (.csv)
+        - El archivo debe contener las siguientes columnas obligatorias:
+          - name: Nombre de la institución
+          - rector_name: Nombre del Rector
+          - rector_email: Email del Rector
+          - rector_phone: Teléfono del Rector (con código de país, ej: +593 987654321)
+          - contraparte_name: Nombre de la Contraparte
+          - contraparte_email: Email de la Contraparte
+          - contraparte_phone: Teléfono de la Contraparte (con código de país)
+        - Columnas opcionales: website, pais, ciudad, direccion, num_teachers, num_students, avg_fee, initial_contact_medium, stage, substage, program_proposed, proposal_value, observations, assigned_commercial
+        """)
+        if st.button("📥 Descargar Template Excel", help="Descarga un archivo Excel con el formato exacto y ejemplos"):
+            import io
+            import pandas as pd
+            template_data = {
+                'name': ['Universidad Ejemplo 1', 'Colegio San José', 'Instituto Tecnológico ABC'],
+                'rector_name': ['Dr. Juan Pérez', 'Lic. María González', 'Ing. Carlos Rodríguez'],
+                'rector_email': ['rector@universidad.edu', 'direccion@colegio.edu.ec', 'director@instituto.edu'],
+                'rector_phone': ['+593 987654321', '+57 3001234567', '+51 987123456'],
+                'contraparte_name': ['Lic. Ana Martínez', 'Prof. Luis Herrera', 'Dra. Patricia Silva'],
+                'contraparte_email': ['coordinacion@universidad.edu', 'academico@colegio.edu.ec', 'coordinadora@instituto.edu'],
+                'contraparte_phone': ['+593 987654322', '+57 3001234568', '+51 987123457'],
+                'website': ['www.universidad.edu', 'www.colegiosanjose.edu.ec', 'www.institutoabc.edu'],
+                'pais': ['Ecuador', 'Colombia', 'Perú'],
+                'ciudad': ['Quito', 'Bogotá', 'Lima'],
+                'direccion': ['Av. Principal 123', 'Calle 45 #12-34', 'Jr. Los Olivos 567'],
+                'num_teachers': [150, 25, 80],
+                'num_students': [2500, 450, 1200],
+                'avg_fee': [350.50, 180.00, 280.75],
+                'initial_contact_medium': ['Whatsapp', 'Correo electrónico', 'Reunión virtual'],
+                'stage': ['En cola', 'En Proceso', 'En cola'],
+                'substage': ['Primera reunión', 'Envío propuesta', 'Reunión agendada'],
+                'program_proposed': ['Programa Muyu Lab', 'Demo', 'Programa Muyu App'],
+                'proposal_value': [15000.00, 0.00, 8500.50],
+                'observations': ['Interesados en programa completo', 'Solicitan demo presencial', 'Evalúan presupuesto'],
+                'assigned_commercial': ['Juan Comercial', 'María Ventas', 'Carlos Manager'],
+                'contract_start_date': ['2024-03-01', '', '2024-04-15'],
+                'contract_end_date': ['2025-02-28', '', '2025-04-14']
+            }
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                template_df = pd.DataFrame(template_data)
+                template_df.to_excel(writer, sheet_name='Ejemplos', index=False)
+                empty_df = pd.DataFrame(columns=template_df.columns)
+                empty_df.to_excel(writer, sheet_name='Plantilla_Vacia', index=False)
+                instructions = pd.DataFrame({
+                    'Columna': list(template_df.columns),
+                    'Obligatorio': ['SÍ' if col in ['name', 'rector_name', 'rector_email', 'rector_phone', 'contraparte_name', 'contraparte_email', 'contraparte_phone'] else 'NO' for col in template_df.columns],
+                    'Descripción': [
+                        'Nombre de la institución',
+                        'Nombre completo del Rector',
+                        'Email del Rector',
+                        'Teléfono con código país (+593 987654321)',
+                        'Nombre completo de la Contraparte',
+                        'Email de la Contraparte',
+                        'Teléfono con código país (+593 987654321)',
+                        'Página web (opcional)',
+                        'País (Ecuador, Colombia, Perú, México, Chile, Argentina)',
+                        'Ciudad donde está ubicada',
+                        'Dirección física completa',
+                        'Número de docentes (número entero)',
+                        'Número de estudiantes (número entero)',
+                        'Pensión promedio (número decimal)',
+                        'Medio de contacto inicial',
+                        'Etapa actual del lead',
+                        'Subetapa específica',
+                        'Programa que se propuso',
+                        'Valor de la propuesta (número decimal)',
+                        'Observaciones generales',
+                        'Responsable comercial asignado',
+                        'Fecha inicio contrato (YYYY-MM-DD)',
+                        'Fecha fin contrato (YYYY-MM-DD)'
+                    ]
+                })
+                instructions.to_excel(writer, sheet_name='Instrucciones', index=False)
+            st.download_button(
+                label="📥 Descargar Template",
+                data=output.getvalue(),
+                file_name="template_carga_masiva_instituciones.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        uploaded_file = st.file_uploader(
+            "Selecciona el archivo", 
+            type=['csv', 'xlsx', 'xls'],
+            help="Formatos soportados: CSV, Excel (xlsx, xls)"
+        )
+        if uploaded_file is not None:
+            import pandas as pd
+            import uuid
+            import datetime
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df_upload = pd.read_csv(uploaded_file)
+                else:
+                    try:
+                        df_upload = pd.read_excel(uploaded_file, sheet_name='Plantilla_Vacia')
+                        if df_upload.empty:
+                            df_upload = pd.read_excel(uploaded_file, sheet_name=0)
+                    except:
+                        df_upload = pd.read_excel(uploaded_file, sheet_name=0)
+                df_upload = df_upload.dropna(how='all')
+                if df_upload.empty:
+                    st.warning("El archivo está vacío o no contiene datos.")
+                else:
+                    st.success(f"Archivo cargado exitosamente: {len(df_upload)} filas encontradas")
+                    st.info(f"**Archivo:** {uploaded_file.name} | **Tamaño:** {uploaded_file.size} bytes")
+                    st.subheader("Vista previa de los datos cargados:")
+                    st.dataframe(df_upload.head(10), use_container_width=True)
+                    st.subheader("Información de columnas:")
+                    col_info = pd.DataFrame({
+                        'Columna': df_upload.columns.tolist(),
+                        'Tipo de datos': [str(df_upload[col].dtype) for col in df_upload.columns],
+                        'Valores no nulos': [df_upload[col].notna().sum() for col in df_upload.columns],
+                        'Valores únicos': [df_upload[col].nunique() for col in df_upload.columns]
+                    })
+                    st.dataframe(col_info, use_container_width=True)
+                    required_cols = ['name', 'rector_name', 'rector_email', 'rector_phone', 'contraparte_name', 'contraparte_email', 'contraparte_phone']
+                    missing_cols = [col for col in required_cols if col not in df_upload.columns]
+                    if missing_cols:
+                        st.warning(f"⚠️ Faltan las siguientes columnas recomendadas: {', '.join(missing_cols)}")
+                        st.info("💡 El sistema creará valores por defecto para los campos faltantes. Podrás editarlos después en el Panel Admin.")
+                        st.markdown("**Valores por defecto que se asignarán:**")
+                        defaults_info = []
+                        for col in missing_cols:
+                            if 'email' in col:
+                                default_val = "sin-email@temp.com"
+                            elif 'phone' in col:
+                                default_val = "+593 000000000"
+                            elif 'name' in col and 'rector' in col:
+                                default_val = "Rector Sin Definir"
+                            elif 'name' in col and 'contraparte' in col:
+                                default_val = "Contraparte Sin Definir"
+                            else:
+                                default_val = "Sin definir"
+                            defaults_info.append({'Campo': col, 'Valor por defecto': default_val})
+                        defaults_df = pd.DataFrame(defaults_info)
+                        st.dataframe(defaults_df, use_container_width=True)
+                    else:
+                        st.success("✅ Todas las columnas recomendadas están presentes")
+                    st.subheader("Resumen de validación:")
+                    truly_required = ['name']
+                    missing_truly_required = [col for col in truly_required if col not in df_upload.columns]
+                    if missing_truly_required:
+                        st.error(f"❌ La columna 'name' es absolutamente obligatoria y no se encuentra en el archivo.")
+                        st.stop()
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total de filas", len(df_upload))
+                    with col2:
+                        valid_rows = df_upload.dropna(subset=['name'])
+                        st.metric("Filas con nombre", len(valid_rows))
+                    with col3:
+                        invalid_rows = len(df_upload) - len(valid_rows)
+                        st.metric("Filas sin nombre", invalid_rows)
+                    if invalid_rows > 0:
+                        st.warning("⚠️ Las filas sin nombre de institución serán omitidas")
+                        st.markdown("**Filas sin nombre que serán omitidas:**")
+                        invalid_df = df_upload[df_upload['name'].isna()]
+                        st.dataframe(invalid_df, use_container_width=True)
+                    if len(valid_rows) > 0:
+                        st.info(f"🚀 Listo para procesar {len(valid_rows)} instituciones")
+                        if st.button("🚀 Procesar y cargar instituciones", type="primary"):
+                            progress_bar = st.progress(0)
+                            success_count = 0
+                            error_count = 0
+                            errors = []
+                            warnings = []
+                            for index, row in valid_rows.iterrows():
+                                try:
+                                    inst = {
+                                        'id': str(uuid.uuid4()),
+                                        'name': str(row['name']).strip(),
+                                    }
+                                    inst['rector_name'] = str(row.get('rector_name', 'Rector Sin Definir')).strip() if pd.notna(row.get('rector_name')) else 'Rector Sin Definir'
+                                    inst['rector_email'] = str(row.get('rector_email', 'rector-sin-email@temp.com')).strip() if pd.notna(row.get('rector_email')) else 'rector-sin-email@temp.com'
+                                    inst['rector_phone'] = str(row.get('rector_phone', '+593 000000000')).strip() if pd.notna(row.get('rector_phone')) else '+593 000000000'
+                                    inst['contraparte_name'] = str(row.get('contraparte_name', 'Contraparte Sin Definir')).strip() if pd.notna(row.get('contraparte_name')) else 'Contraparte Sin Definir'
+                                    inst['contraparte_email'] = str(row.get('contraparte_email', 'contraparte-sin-email@temp.com')).strip() if pd.notna(row.get('contraparte_email')) else 'contraparte-sin-email@temp.com'
+                                    inst['contraparte_phone'] = str(row.get('contraparte_phone', '+593 000000000')).strip() if pd.notna(row.get('contraparte_phone')) else '+593 000000000'
+                                    inst.update({
+                                        'website': str(row.get('website', '')).strip() if pd.notna(row.get('website')) else '',
+                                        'pais': str(row.get('pais', 'Ecuador')).strip() if pd.notna(row.get('pais')) else 'Ecuador',
+                                        'ciudad': str(row.get('ciudad', '')).strip() if pd.notna(row.get('ciudad')) else '',
+                                        'direccion': str(row.get('direccion', '')).strip() if pd.notna(row.get('direccion')) else '',
+                                        'created_contact': str(datetime.date.today()),
+                                        'last_interaction': str(datetime.date.today()),
+                                        'num_teachers': int(float(row.get('num_teachers', 0))) if pd.notna(row.get('num_teachers')) and str(row.get('num_teachers')).replace('.','').replace(',','').isdigit() else 0,
+                                        'num_students': int(float(row.get('num_students', 0))) if pd.notna(row.get('num_students')) and str(row.get('num_students')).replace('.','').replace(',','').isdigit() else 0,
+                                        'avg_fee': float(str(row.get('avg_fee', 0)).replace(',', '.')) if pd.notna(row.get('avg_fee')) else 0.0,
+                                        'initial_contact_medium': str(row.get('initial_contact_medium', 'Whatsapp')).strip() if pd.notna(row.get('initial_contact_medium')) else 'Whatsapp',
+                                        'stage': str(row.get('stage', 'En cola')).strip() if pd.notna(row.get('stage')) else 'En cola',
+                                        'substage': str(row.get('substage', 'Primera reunión')).strip() if pd.notna(row.get('substage')) else 'Primera reunión',
+                                        'program_proposed': str(row.get('program_proposed', 'Demo')).strip() if pd.notna(row.get('program_proposed')) else 'Demo',
+                                        'proposal_value': float(str(row.get('proposal_value', 0)).replace(',', '.')) if pd.notna(row.get('proposal_value')) else 0.0,
+                                        'contract_start_date': str(row.get('contract_start_date')) if pd.notna(row.get('contract_start_date')) else None,
+                                        'contract_end_date': str(row.get('contract_end_date')) if pd.notna(row.get('contract_end_date')) else None,
+                                        'observations': str(row.get('observations', '')).strip() if pd.notna(row.get('observations')) else '',
+                                        'assigned_commercial': str(row.get('assigned_commercial', '')).strip() if pd.notna(row.get('assigned_commercial')) else '',
+                                        'no_interest_reason': None
+                                    })
+                                    save_institution(inst)
+                                    success_count += 1
+                                except Exception as e:
+                                    error_count += 1
+                                    errors.append(f"Fila {index + 2}: {str(e)}")
+                                progress = (index + 1) / len(valid_rows)
+                                progress_bar.progress(progress)
+                            st.success(f"✅ Proceso completado! {success_count} instituciones cargadas.")
+                            if error_count > 0:
+                                st.error(f"❌ {error_count} errores durante la carga.")
+                                for error in errors:
+                                    st.error(error)
+                            st.info("🔄 Recarga la página para ver las nuevas instituciones en el sistema.")
+            except Exception as e:
+                st.error(f"❌ Error al procesar el archivo: {str(e)}")
+                st.info("💡 Verifica que el archivo no esté corrupto y tenga el formato correcto.")
                 st.balloons()
 
 def show_buscar_editar():
@@ -1676,10 +1906,37 @@ def show_tareas_alertas():
                     create_task(row['id'], 'Seguimiento - Lead sin contacto >7d', pd.Timestamp.now().date() + timedelta(days=1), notes='Generado desde alerta')
                     st.success('✅ Tarea creada')
                     st.rerun()
+            # Botón para eliminar todas las alertas de seguimiento
+            if st.button('🗑️ Eliminar todas las Alertas de Seguimiento'):
+                with get_conn() as conn_del:
+                    conn_del.execute("""
+                        UPDATE institutions SET last_interaction = datetime('now')
+                        WHERE last_interaction < datetime('now', '-7 days')
+                    """)
+                    conn_del.commit()
+                st.success('Todas las alertas de seguimiento han sido eliminadas (se actualizó la fecha de última interacción).')
+                st.rerun()
         else:
             st.success("✅ Todos los leads tienen contacto reciente")
     finally:
         conn.close()
+
+    # Mostrar alertas de cambios de descripción
+    st.subheader("🔔 Alertas de cambios de descripción (ventas)")
+    # Forzar refresco de la sección de alertas si se ha guardado una nueva
+    if 'alertas_descripcion_refresh' not in st.session_state:
+        st.session_state['alertas_descripcion_refresh'] = 0
+    if st.button('🔄 Refrescar alertas de descripción'):
+        st.session_state['alertas_descripcion_refresh'] += 1
+        st.rerun()
+    conn = get_conn()
+    alerts_df = pd.read_sql_query('''SELECT * FROM admin_alerts WHERE change_type = 'descripcion' ORDER BY change_date DESC''', conn)
+    conn.close()
+    if alerts_df.empty:
+        st.info("No hay alertas de cambios de descripción recientes.")
+    else:
+        for idx, alert in alerts_df.iterrows():
+            st.warning(f"[{alert['change_date']}] {alert['changed_by']} modificó la descripción de '{alert['institution_name']}'\n\n**Antes:** {alert['old_value']}\n**Ahora:** {alert['new_value']}")
     
     # Botón para limpiar cache de tareas
     st.markdown('---')

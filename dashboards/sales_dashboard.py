@@ -352,43 +352,51 @@ def show_my_institutions(username):
         with col:
             stage_df = df[df['stage'] == stage]
             st.subheader(f"{stage} ({len(stage_df)})")
-            
             if stage_df.empty:
                 st.info(f"Sin instituciones en {stage}")
             else:
                 for idx, row in stage_df.iterrows():
                     with st.expander(f"🏢 {row['name']}", expanded=False):
-                        
                         # Información básica
                         st.write(f"**📍 Ubicación:** {row.get('pais', 'N/A')}, {row.get('ciudad', 'N/A')}")
                         st.write(f"**📅 Último contacto:** {safe_date_display(row['last_interaction'])}")
                         st.write(f"**🎓 Programa:** {row.get('program_proposed', 'N/A')}")
                         st.write(f"**💰 Valor propuesta:** ${row.get('proposal_value', 0):,.2f}")
-                        
                         # Contactos
                         st.markdown("**👥 Contactos:**")
                         st.write(f"📧 **Rector:** {row.get('rector_name', 'N/A')} - {row.get('rector_email', 'N/A')}")
                         st.write(f"🤝 **Contraparte:** {row.get('contraparte_name', 'N/A')} - {row.get('contraparte_email', 'N/A')}")
-                        
-                        # Observaciones
-                        if row.get('observations'):
-                            st.write(f"**📝 Observaciones:** {row['observations']}")
-                        
+                        # Edición de observaciones
+                        st.markdown("**📝 Observaciones/Descripción:**")
+                        obs_key = f"obs_{row['id']}"
+                        new_obs = st.text_area("Editar descripción de la institución", value=row.get('observations') or '', key=obs_key)
+                        if st.button("� Guardar descripción", key=f"save_obs_{row['id']}", use_container_width=True):
+                            conn = get_conn()
+                            c = conn.cursor()
+                            c.execute('UPDATE institutions SET observations=?, last_interaction=? WHERE id=?', (new_obs, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row['id']))
+                            conn.commit()
+                            conn.close()
+                            # Registrar alerta para admin
+                            try:
+                                conn = get_conn()
+                                c = conn.cursor()
+                                c.execute('''INSERT INTO admin_alerts (id, institution_id, institution_name, changed_by, change_type, old_value, new_value, change_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (
+                                    str(uuid.uuid4()), row['id'], row['name'], username, 'descripcion', row.get('observations') or '', new_obs, datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                ))
+                                conn.commit()
+                                conn.close()
+                            except Exception as e:
+                                st.warning(f"No se pudo registrar la alerta para el admin: {e}")
+                            st.success("Descripción actualizada y alerta enviada al admin.")
+                            st.rerun()
                         st.markdown("---")
-                        
-                        # Sección de comunicación con clientes
+                        # Comunicación con clientes (igual que antes)
                         st.markdown("**📞 Comunicación con Cliente:**")
-                        
-                        # Verificar configuración de email
                         if SALES_EMAIL == "ventas@muyu.com":
                             st.warning("⚠️ Configura SALES_EMAIL y SALES_APP_PASSWORD para enviar emails")
-                        
                         col1, col2 = st.columns(2)
-                        
-                        # Comunicación con Rector
                         with col1:
                             st.markdown("**👨‍💼 Rector:**")
-                            
                             if st.button(f'📧 Email Rector', key=f'email_rector_{row["id"]}', use_container_width=True):
                                 with st.spinner('📧 Enviando email...'):
                                     success, message = send_client_email(row, 'rector')
@@ -397,7 +405,6 @@ def show_my_institutions(username):
                                         st.balloons()
                                     else:
                                         st.error(message)
-                            
                             if st.button(f'💬 WhatsApp Rector', key=f'wa_rector_{row["id"]}', use_container_width=True):
                                 success, result = create_client_whatsapp(row, 'rector')
                                 if success:
@@ -406,11 +413,8 @@ def show_my_institutions(username):
                                     st.components.v1.html(f'<script>window.open("{result}", "_blank");</script>', height=0)
                                 else:
                                     st.error(result)
-                        
-                        # Comunicación con Contraparte
                         with col2:
                             st.markdown("**🤝 Contraparte:**")
-                            
                             if st.button(f'📧 Email Contraparte', key=f'email_contra_{row["id"]}', use_container_width=True):
                                 with st.spinner('📧 Enviando email...'):
                                     success, message = send_client_email(row, 'contraparte')
@@ -419,7 +423,6 @@ def show_my_institutions(username):
                                         st.balloons()
                                     else:
                                         st.error(message)
-                            
                             if st.button(f'💬 WhatsApp Contraparte', key=f'wa_contra_{row["id"]}', use_container_width=True):
                                 success, result = create_client_whatsapp(row, 'contraparte')
                                 if success:
@@ -428,25 +431,6 @@ def show_my_institutions(username):
                                     st.components.v1.html(f'<script>window.open("{result}", "_blank");</script>', height=0)
                                 else:
                                     st.error(result)
-                        
-                        # Crear tarea de seguimiento
-                        st.markdown("**➕ Crear Tarea de Seguimiento:**")
-                        with st.form(key=f"task_form_{row['id']}"):
-                            task_title = st.text_input('Título de la tarea', 
-                                                     value=f"Seguimiento comercial - {row['name']}")
-                            task_date = st.date_input('Fecha de vencimiento', 
-                                                    value=now_date() + timedelta(days=3))
-                            task_notes = st.text_area('Notas', 
-                                                     placeholder='Ej: Llamar para agendar reunión...')
-                            
-                            if st.form_submit_button('➕ Crear Tarea'):
-                                if task_title:
-                                    notes_with_user = f"{task_notes}\nResponsable: {username}"
-                                    if create_task(row['id'], task_title, task_date, notes_with_user):
-                                        st.success('✅ Tarea creada correctamente')
-                                        st.rerun()
-                                else:
-                                    st.error("❌ El título es obligatorio")
 
 def show_my_tasks(username):
     """Mostrar tareas del usuario de ventas"""
