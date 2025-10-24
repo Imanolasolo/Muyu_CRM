@@ -10,6 +10,7 @@ import pandas as pd
 import altair as alt
 import uuid
 import io
+import zipfile
 from pytz import timezone
 import urllib.parse
 import smtplib
@@ -469,13 +470,14 @@ def show_admin_dashboard():
             st.rerun()
     
     # Crear tabs para organizar funcionalidades
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "🏢 Panel Admin", 
         "➕ Registrar Institución", 
         "🔍 Buscar/Editar", 
         "📊 Dashboard", 
         "📋 Tareas & Alertas",
-        "👥 Gestión Usuarios"
+        "👥 Gestión Usuarios",
+        "🧹 Limpiar Leads"
     ])
     
     # Obtener filtros del sidebar
@@ -501,6 +503,9 @@ def show_admin_dashboard():
     
     with tab6:
         show_gestion_usuarios()
+    
+    with tab7:
+        show_clean_leads()
 
 def show_panel_admin(filter_stage, filter_medium, filter_pais, filter_ciudad):
     """Panel Admin - Kanban board con ciclo de vida de leads con carga lazy"""
@@ -2118,6 +2123,152 @@ def mostrar_lista_usuarios():
         st.error(f"❌ Error al cargar usuarios: {str(e)}")
         if 'conn' in locals():
             conn.close()
+
+
+def create_leads_backup_bytes():
+    """Genera un ZIP en memoria con CSVs de institutions, interactions, tasks y admin_alerts."""
+    try:
+        conn = get_conn()
+        dfs = {}
+        try:
+            dfs['institutions'] = pd.read_sql_query('SELECT * FROM institutions', conn)
+        except Exception:
+            dfs['institutions'] = pd.DataFrame()
+        try:
+            dfs['interactions'] = pd.read_sql_query('SELECT * FROM interactions', conn)
+        except Exception:
+            dfs['interactions'] = pd.DataFrame()
+        try:
+            dfs['tasks'] = pd.read_sql_query('SELECT * FROM tasks', conn)
+        except Exception:
+            dfs['tasks'] = pd.DataFrame()
+        try:
+            dfs['admin_alerts'] = pd.read_sql_query('SELECT * FROM admin_alerts', conn)
+        except Exception:
+            dfs['admin_alerts'] = pd.DataFrame()
+        conn.close()
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+            for name, df in dfs.items():
+                try:
+                    csv_bytes = df.to_csv(index=False).encode('utf-8')
+                except Exception:
+                    # If DataFrame cannot be serialized, store an empty file with message
+                    csv_bytes = f"# No se pudo exportar {name}\n".encode('utf-8')
+                z.writestr(f"{name}.csv", csv_bytes)
+
+        buf.seek(0)
+        return buf.getvalue()
+
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
+
+
+def show_clean_leads():
+    """Pestaña para limpiar por completo los registros de leads (institutions + related) sin tocar usuarios."""
+    st.header('🧹 Limpiar Leads — Eliminación Masiva de Datos de Leads')
+    st.warning('Esta herramienta eliminará permanentemente TODOS los registros relacionados con leads (institutions, interactions, tasks y alertas). Esta acción es irreversible. No se eliminarán usuarios.')
+
+    # Mostrar conteos actuales
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('SELECT COUNT(*) FROM institutions')
+        inst_count = c.fetchone()[0]
+        c.execute('SELECT COUNT(*) FROM interactions')
+        interactions_count = c.fetchone()[0]
+        c.execute('SELECT COUNT(*) FROM tasks')
+        tasks_count = c.fetchone()[0]
+        c.execute('SELECT COUNT(*) FROM admin_alerts')
+        alerts_count = c.fetchone()[0]
+        conn.close()
+    except Exception as e:
+        st.error(f"❌ Error al consultar la base de datos: {str(e)}")
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric('Institutions', inst_count)
+    col2.metric('Interactions', interactions_count)
+    col3.metric('Tasks', tasks_count)
+    col4.metric('Admin alerts', alerts_count)
+
+    st.markdown('---')
+
+    # Backup option
+    backup_before = st.checkbox('📦 Hacer backup descargable antes de eliminar (recomendado)', value=True)
+    if backup_before:
+        try:
+            backup_bytes = create_leads_backup_bytes()
+            fname = f"backup_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            st.download_button('📥 Descargar Backup (ZIP)', data=backup_bytes, file_name=fname, mime='application/zip')
+            st.info('Descarga el backup antes de proceder a la eliminación.')
+        except Exception as e:
+            st.error(f"❌ Error al generar el backup: {str(e)}")
+
+    st.markdown('---')
+    st.markdown('### Confirmaciones')
+    confirm1 = st.checkbox('✅ Confirmo que quiero eliminar TODOS los leads (institutions, interactions, tasks, admin_alerts)')
+    confirm2 = st.checkbox('✅ Entiendo que esta acción es irreversible y NO afectará a los usuarios')
+    tipo_confirmacion = st.text_input("Escribe exactamente 'ELIMINAR LEADS' para habilitar el botón de eliminación:")
+
+    if confirm1 and confirm2 and tipo_confirmacion == 'ELIMINAR LEADS':
+        if st.button('🗑️ ELIMINAR LEADS PERMANENTEMENTE', type='primary'):
+            try:
+                conn = get_conn()
+                c = conn.cursor()
+
+                # Obtener conteos previos (por si acaso)
+                c.execute('SELECT COUNT(*) FROM interactions')
+                before_inter = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM tasks')
+                before_tasks = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM admin_alerts')
+                before_alerts = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM institutions')
+                before_insts = c.fetchone()[0]
+
+                # Eliminar en orden: interacciones, tareas, alertas, institutions
+                c.execute('DELETE FROM interactions WHERE institution_id IN (SELECT id FROM institutions)')
+                c.execute('DELETE FROM tasks WHERE institution_id IN (SELECT id FROM institutions)')
+                c.execute("DELETE FROM admin_alerts WHERE institution_id IN (SELECT id FROM institutions)")
+                c.execute('DELETE FROM institutions')
+                conn.commit()
+
+                # Obtener conteos después
+                c.execute('SELECT COUNT(*) FROM interactions')
+                after_inter = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM tasks')
+                after_tasks = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM admin_alerts')
+                after_alerts = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM institutions')
+                after_insts = c.fetchone()[0]
+
+                conn.close()
+
+                st.success('🧹 Eliminación completada correctamente')
+                st.markdown(f"- Interactions: {before_inter} → {after_inter}")
+                st.markdown(f"- Tasks: {before_tasks} → {after_tasks}")
+                st.markdown(f"- Admin alerts: {before_alerts} → {after_alerts}")
+                st.markdown(f"- Institutions: {before_insts} → {after_insts}")
+                st.balloons()
+                # Forzar recarga de estado en la UI
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Error durante la eliminación: {str(e)}")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    else:
+        if st.button('🗑️ ELIMINAR LEADS PERMANENTEMENTE', disabled=True):
+            st.info('Completa las confirmaciones y escribe ELIMINAR LEADS para habilitar')
 
 def crear_nuevo_usuario():
     """Formulario para crear nuevo usuario"""
